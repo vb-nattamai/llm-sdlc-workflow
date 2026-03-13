@@ -31,6 +31,7 @@ from rich.table import Table
 from agents import (
     ArchitectureAgent,
     EngineeringAgent,
+    InfrastructureAgent,
     IntentAgent,
     ReviewAgent,
     TestingAgent,
@@ -38,6 +39,7 @@ from agents import (
 from models.artifacts import (
     ArchitectureArtifact,
     EngineeringArtifact,
+    InfrastructureArtifact,
     IntentArtifact,
     ReviewArtifact,
     SpecArtifact,
@@ -57,10 +59,11 @@ class PipelineResult:
     intent: Optional[IntentArtifact] = None
     architecture: Optional[ArchitectureArtifact] = None
     engineering: Optional[EngineeringArtifact] = None
+    infrastructure: Optional[InfrastructureArtifact] = None
     review: Optional[ReviewArtifact] = None
 
     test_architecture: Optional[TestingArtifact] = None
-    test_engineering: Optional[TestingArtifact] = None
+    test_infrastructure: Optional[TestingArtifact] = None
     test_review: Optional[TestingArtifact] = None
 
     errors: list = field(default_factory=list)
@@ -69,7 +72,7 @@ class PipelineResult:
     def passed(self) -> bool:
         return all([
             self.test_architecture and self.test_architecture.passed,
-            self.test_engineering and self.test_engineering.passed,
+            self.test_infrastructure and self.test_infrastructure.passed,
             self.test_review and self.test_review.passed,
             self.review and self.review.passed,
         ])
@@ -82,6 +85,7 @@ class Pipeline:
         self.intent_agent = IntentAgent(artifacts_dir)
         self.architecture_agent = ArchitectureAgent(artifacts_dir)
         self.engineering_agent = EngineeringAgent(artifacts_dir)
+        self.infrastructure_agent = InfrastructureAgent(artifacts_dir)
         self.review_agent = ReviewAgent(artifacts_dir)
         self.testing_agent = TestingAgent(artifacts_dir)
 
@@ -112,7 +116,7 @@ class Pipeline:
 
         console.print(Panel(
             "[bold]🚀 Multi-Agent Pipeline Starting[/bold]\n\n"
-            "Intent → Architecture → [Test] → Engineering → [Test] → Review → [Test]"
+            "Intent → Architecture → [Test] → Engineering → Infrastructure → [Live Test] → Review → [Test]"
             + spec_note,
             title="Pipeline",
             style="bold blue",
@@ -120,17 +124,17 @@ class Pipeline:
 
         try:
             # Step 1: Intent
-            self._step_header("Step 1/7", "Intent Agent", "Analysing requirements")
+            self._step_header("Step 1/8", "Intent Agent", "Analysing requirements")
             result.intent = await self.intent_agent.run(requirements)
             self._step_done("Intent", len(result.intent.requirements), "requirements extracted")
 
             # Step 2: Architecture (+ optional spec)
-            self._step_header("Step 2/7", "Architecture Agent", "Designing system architecture")
+            self._step_header("Step 2/8", "Architecture Agent", "Designing system architecture")
             result.architecture = await self.architecture_agent.run(result.intent, spec)
             self._step_done("Architecture", len(result.architecture.components), "components designed")
 
             # Step 3: Testing — architecture stage (intent only)
-            self._step_header("Step 3/7", "Testing Agent", "Verifying architecture vs requirements")
+            self._step_header("Step 3/8", "Testing Agent", "Verifying architecture vs requirements")
             result.test_architecture = await self.testing_agent.run(
                 stage="architecture",
                 intent=result.intent,
@@ -139,31 +143,50 @@ class Pipeline:
             self._testing_status("Architecture", result.test_architecture)
 
             # Step 4: Engineering (+ optional spec)
-            self._step_header("Step 4/7", "Engineering Agent", "Selecting stack and generating code")
+            self._step_header("Step 4/8", "Engineering Agent", "Selecting stack and generating code")
             result.engineering = await self.engineering_agent.run(
                 result.intent, result.architecture, spec
             )
             self._step_done("Engineering", len(result.engineering.generated_files), "files generated")
 
-            # Step 5: Testing — engineering stage (intent only)
-            self._step_header("Step 5/7", "Testing Agent", "Verifying implementation vs requirements")
-            result.test_engineering = await self.testing_agent.run(
-                stage="engineering",
+            # Step 5: Infrastructure — generate IaC, build and start containers
+            self._step_header("Step 5/8", "Infrastructure Agent", "Writing IaC and starting containers")
+            result.infrastructure = await self.infrastructure_agent.run(
+                result.intent, result.architecture, result.engineering
+            )
+            if result.infrastructure.container_running:
+                self._step_done(
+                    "Infrastructure",
+                    len(result.infrastructure.iac_files),
+                    f"IaC files written — service live at {result.infrastructure.base_url}",
+                )
+            else:
+                self._step_done(
+                    "Infrastructure",
+                    len(result.infrastructure.iac_files),
+                    "IaC files written (container not running — live tests will be skipped)",
+                )
+
+            # Step 6: Testing — infrastructure stage (live HTTP tests against running container)
+            self._step_header("Step 6/8", "Testing Agent", "Running live HTTP tests against container")
+            result.test_infrastructure = await self.testing_agent.run(
+                stage="infrastructure",
                 intent=result.intent,
                 architecture=result.architecture,
                 engineering=result.engineering,
+                infrastructure=result.infrastructure,
             )
-            self._testing_status("Engineering", result.test_engineering)
+            self._testing_status("Infrastructure (live)", result.test_infrastructure)
 
-            # Step 6: Review
-            self._step_header("Step 6/7", "Review Agent", "Reviewing quality, security, reliability")
+            # Step 7: Review
+            self._step_header("Step 7/8", "Review Agent", "Reviewing quality, security, reliability")
             result.review = await self.review_agent.run(
                 result.intent, result.architecture, result.engineering
             )
             self._review_status(result.review)
 
-            # Step 7: Testing — review stage (intent only)
-            self._step_header("Step 7/7", "Testing Agent", "Final verification")
+            # Step 8: Testing — review stage (final verification)
+            self._step_header("Step 8/8", "Testing Agent", "Final verification")
             result.test_review = await self.testing_agent.run(
                 stage="review",
                 intent=result.intent,
@@ -176,6 +199,10 @@ class Pipeline:
         except Exception as e:
             result.errors.append(str(e))
             console.print_exception()
+        finally:
+            # Always stop containers, even if a later step failed
+            if result.infrastructure and result.infrastructure.container_running:
+                await self.infrastructure_agent.stop_containers()
 
         result.completed_at = datetime.now().isoformat()
         self._save_report(result)
@@ -222,10 +249,13 @@ class Pipeline:
                 "requirements_count": len(result.intent.requirements) if result.intent else 0,
                 "components_count": len(result.architecture.components) if result.architecture else 0,
                 "files_generated": len(result.engineering.generated_files) if result.engineering else 0,
+                "iac_files_written": len(result.infrastructure.iac_files) if result.infrastructure else 0,
+                "container_running": result.infrastructure.container_running if result.infrastructure else False,
+                "container_url": result.infrastructure.base_url if result.infrastructure else None,
                 "review_score": result.review.overall_score if result.review else None,
                 "review_passed": result.review.passed if result.review else None,
                 "test_architecture_passed": result.test_architecture.passed if result.test_architecture else None,
-                "test_engineering_passed": result.test_engineering.passed if result.test_engineering else None,
+                "test_infrastructure_passed": result.test_infrastructure.passed if result.test_infrastructure else None,
                 "test_review_passed": result.test_review.passed if result.test_review else None,
             },
         }
@@ -260,11 +290,20 @@ class Pipeline:
             eng = result.engineering
             table.add_row("Engineering", "[green]DONE[/green]",
                 f"{len(eng.generated_files)} files, backend: {eng.backend_tech.framework}")
-        if result.test_engineering:
-            tc = result.test_engineering
-            passed = sum(1 for t in tc.test_cases if t.status == "passed")
-            table.add_row("Testing (engineering)", status(tc.passed),
-                f"{passed}/{len(tc.test_cases)} passed, {len(tc.blocking_issues)} blocking")
+        if result.infrastructure:
+            infra = result.infrastructure
+            container_status = f"live at {infra.base_url}" if infra.container_running else "not running"
+            table.add_row("Infrastructure", "[green]DONE[/green]",
+                f"{len(infra.iac_files)} IaC files, container: {container_status}")
+        if result.test_infrastructure:
+            tc = result.test_infrastructure
+            live_total = len(tc.http_test_cases)
+            live_passed = sum(1 for t in tc.http_test_cases if t.status == "passed")
+            static_passed = sum(1 for t in tc.test_cases if t.status == "passed")
+            table.add_row("Testing (infrastructure)", status(tc.passed),
+                f"{static_passed}/{len(tc.test_cases)} plan passed, "
+                f"{live_passed}/{live_total} live HTTP passed, "
+                f"{len(tc.blocking_issues)} blocking")
         if result.review:
             rv = result.review
             critical = sum(1 for i in rv.issues if i.severity == "critical")

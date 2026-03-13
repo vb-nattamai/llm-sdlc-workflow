@@ -127,6 +127,35 @@ class EngineeringArtifact(BaseModel):
     decisions: List[DecisionRecord]
 
 
+# ─── Infrastructure Agent ────────────────────────────────────────────────────
+
+
+class IaCFile(BaseModel):
+    """A single Infrastructure-as-Code file (Dockerfile, docker-compose.yml, etc.)."""
+
+    path: str       # relative path inside the generated/ directory, e.g. "Dockerfile"
+    content: str    # full file content
+    purpose: str    # one-line description
+
+
+class InfrastructureArtifact(BaseModel):
+    """Output of the Infrastructure Agent — IaC files and container runtime info."""
+
+    iac_files: List[IaCFile]              # Dockerfile, docker-compose.yml, .env.example, …
+    primary_service_port: int             # host port the app is exposed on
+    health_check_path: str = "/health"    # endpoint polled to confirm readiness
+    startup_timeout_seconds: int = 90     # seconds to wait before declaring startup failed
+    environment_variables: Dict[str, str] = {}   # VAR_NAME → default / description
+    service_dependencies: List[str] = []  # e.g. ["postgres", "redis"]
+    build_notes: List[str] = []
+    spec_compliance_notes: List[str] = []
+    decisions: List[DecisionRecord]
+
+    # Runtime fields — populated by the pipeline after the container starts (not from LLM)
+    base_url: Optional[str] = None
+    container_running: bool = False
+
+
 # ─── Review Agent ────────────────────────────────────────────────────────────
 
 
@@ -158,6 +187,26 @@ class ReviewArtifact(BaseModel):
 # ─── Testing Agent ───────────────────────────────────────────────────────────
 
 
+class HttpTestCase(BaseModel):
+    """A live HTTP test case executed against the running container."""
+
+    id: str
+    name: str
+    description: str
+    requirement_covered: str
+    method: str                         # GET | POST | PUT | DELETE | PATCH
+    path: str                           # e.g. /api/v1/tasks
+    headers: Dict[str, str] = {}
+    request_body: Optional[Dict] = None
+    expected_status: int
+    response_contains: List[str] = []   # substrings / keys that must appear in body
+    # Populated after execution
+    status: Optional[str] = None        # passed | failed | error
+    actual_status: Optional[int] = None
+    actual_response: Optional[str] = None
+    error: Optional[str] = None
+
+
 class TestCase(BaseModel):
     id: str
     name: str
@@ -175,6 +224,7 @@ class TestingArtifact(BaseModel):
 
     stage: str
     test_cases: List[TestCase]
+    http_test_cases: List[HttpTestCase] = []   # live HTTP tests (infrastructure stage)
     coverage_areas: List[str]
     uncovered_areas: List[str]
     findings: List[str]
