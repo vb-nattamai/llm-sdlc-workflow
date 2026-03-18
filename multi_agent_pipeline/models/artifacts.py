@@ -7,9 +7,27 @@ passed downstream as context.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+
+def _coerce_str_list(v: Any) -> List[str]:
+    """Coerce a list of any values to List[str].
+
+    The LLM occasionally returns dicts or nested objects instead of plain
+    strings inside list fields.  Convert them so validation never fails.
+    """
+    if not isinstance(v, list):
+        return [str(v)] if v is not None else []
+    return [
+        item if isinstance(item, str) else (
+            item.get("description") or item.get("name") or item.get("value")
+            or str(item)
+            if isinstance(item, dict) else str(item)
+        )
+        for item in v
+    ]
 
 
 class DecisionRecord(BaseModel):
@@ -58,6 +76,15 @@ class DiscoveryArtifact(BaseModel):
     risks: List[str] = []
     decisions: List[DecisionRecord] = []
 
+    @field_validator(
+        "requirements", "user_goals", "constraints", "success_criteria",
+        "key_features", "tech_preferences", "risks",
+        mode="before",
+    )
+    @classmethod
+    def _coerce(cls, v: Any) -> List[str]:
+        return _coerce_str_list(v)
+
 
 # ─── Architecture Agent ──────────────────────────────────────────────────────
 
@@ -84,8 +111,17 @@ class ArchitectureArtifact(BaseModel):
     patterns_used: List[str]
     scalability_considerations: List[str]
     trade_offs: List[str]
-    spec_compliance_notes: List[str] = []  # how user specs were applied
+    spec_compliance_notes: List[str] = []
     design_decisions: List[DecisionRecord] = []
+
+    @field_validator(
+        "data_flow", "api_design", "patterns_used",
+        "scalability_considerations", "trade_offs", "spec_compliance_notes",
+        mode="before",
+    )
+    @classmethod
+    def _coerce(cls, v: Any) -> List[str]:
+        return _coerce_str_list(v)
 
 
 # ─── Engineering Agent ───────────────────────────────────────────────────────
