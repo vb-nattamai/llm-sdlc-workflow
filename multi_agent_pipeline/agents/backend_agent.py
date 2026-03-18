@@ -11,8 +11,8 @@ SYSTEM_PROMPT = load_prompt("backend_agent.md")
 
 
 class BackendAgent(BaseAgent):
-    def __init__(self, artifacts_dir: str = "./artifacts"):
-        super().__init__(name="Backend Agent", artifacts_dir=artifacts_dir)
+    def __init__(self, artifacts_dir: str = "./artifacts", generated_dir_name: str = "generated"):
+        super().__init__(name="Backend Agent", artifacts_dir=artifacts_dir, generated_dir_name=generated_dir_name)
 
     async def run(
         self,
@@ -92,7 +92,7 @@ Return JSON with every file's content = \"__PENDING__\". Valid json."""
         import os
         from rich.console import Console
         con = Console()
-        base = os.path.join(self.artifacts_dir, "generated")
+        base = os.path.join(self.artifacts_dir, self.generated_dir_name)
         os.makedirs(base, exist_ok=True)
         for f in artifact.generated_files:
             safe = os.path.normpath(f.path).lstrip(os.sep)

@@ -92,17 +92,18 @@ class PipelineResult:
 
 
 class Pipeline:
-    def __init__(self, artifacts_dir: str = "./artifacts", human_checkpoints: bool = True):
+    def __init__(self, artifacts_dir: str = "./artifacts", human_checkpoints: bool = True, project_name: str = "generated"):
         self.artifacts_dir = artifacts_dir
         self.human_checkpoints = human_checkpoints
+        self.project_name = project_name
         os.makedirs(artifacts_dir, exist_ok=True)
         self.discovery_agent = DiscoveryAgent(artifacts_dir)
         self.architecture_agent = ArchitectureAgent(artifacts_dir)
-        self.spec_agent = SpecAgent(artifacts_dir)
-        self.engineering_agent = EngineeringAgent(artifacts_dir)
-        self.infrastructure_agent = InfrastructureAgent(artifacts_dir)
+        self.spec_agent = SpecAgent(artifacts_dir, generated_dir_name=project_name)
+        self.engineering_agent = EngineeringAgent(artifacts_dir, generated_dir_name=project_name)
+        self.infrastructure_agent = InfrastructureAgent(artifacts_dir, generated_dir_name=project_name)
         self.review_agent = ReviewAgent(artifacts_dir)
-        self.testing_agent = TestingAgent(artifacts_dir)
+        self.testing_agent = TestingAgent(artifacts_dir, generated_dir_name=project_name)
 
     async def run(
         self,
@@ -194,7 +195,7 @@ class Pipeline:
                 f"spec files — services: [{services}]  ports: {ports}"
             )
 
-            _spec_dir = os.path.join(self.artifacts_dir, "generated", "specs")
+            _spec_dir = os.path.join(self.artifacts_dir, self.project_name, "specs")
             _openapi_lines = len((result.generated_spec.openapi_spec or "").splitlines())
             _schema_lines  = len((result.generated_spec.database_schema or "").splitlines())
             _shared = ", ".join(result.generated_spec.shared_models[:6]) or "none"
@@ -447,6 +448,7 @@ class Pipeline:
             "completed_at": result.completed_at,
             "passed": result.passed,
             "errors": result.errors,
+            "project_name": self.project_name,
             "review_iterations_count": len(result.review_iterations),
             "summary": {
                 "requirements_count": len(result.intent.requirements) if result.intent else 0,

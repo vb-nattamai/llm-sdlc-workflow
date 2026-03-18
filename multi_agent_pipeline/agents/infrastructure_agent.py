@@ -35,8 +35,8 @@ console = Console()
 
 
 class InfrastructureAgent(BaseAgent):
-    def __init__(self, artifacts_dir: str = "./artifacts"):
-        super().__init__(name="Infrastructure Agent", artifacts_dir=artifacts_dir)
+    def __init__(self, artifacts_dir: str = "./artifacts", generated_dir_name: str = "generated"):
+        super().__init__(name="Infrastructure Agent", artifacts_dir=artifacts_dir, generated_dir_name=generated_dir_name)
 
     async def run(
         self,
@@ -111,7 +111,7 @@ This is a json response."""
             )
 
         # Write IaC files alongside the generated source code
-        generated_dir = os.path.join(self.artifacts_dir, "generated")
+        generated_dir = os.path.join(self.artifacts_dir, self.generated_dir_name)
         self._write_iac_files(artifact, generated_dir)
 
         if not skip_start:
@@ -123,7 +123,7 @@ This is a json response."""
 
     async def start_service(self, artifact: InfrastructureArtifact) -> InfrastructureArtifact:
         """Start containers for an already-generated IaC artifact."""
-        generated_dir = os.path.join(self.artifacts_dir, "generated")
+        generated_dir = os.path.join(self.artifacts_dir, self.generated_dir_name)
         started = await self._start_containers(generated_dir)
         if started:
             base_url = f"http://localhost:{artifact.primary_service_port}"
@@ -261,7 +261,7 @@ This is a json response."""
 
     async def stop_containers(self) -> None:
         """Tear down the container stack. Called by the pipeline in a finally block."""
-        generated_dir = os.path.join(self.artifacts_dir, "generated")
+        generated_dir = os.path.join(self.artifacts_dir, self.generated_dir_name)
         compose_file = os.path.join(generated_dir, "docker-compose.yml")
         if not os.path.exists(compose_file):
             return

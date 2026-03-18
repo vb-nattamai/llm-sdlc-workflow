@@ -74,9 +74,10 @@ def _make_client() -> AsyncOpenAI:
 
 
 class BaseAgent:
-    def __init__(self, name: str, artifacts_dir: str = "./artifacts"):
+    def __init__(self, name: str, artifacts_dir: str = "./artifacts", generated_dir_name: str = "generated"):
         self.name = name
         self.artifacts_dir = artifacts_dir
+        self.generated_dir_name = generated_dir_name
         os.makedirs(artifacts_dir, exist_ok=True)
         self.history: List[Dict[str, Any]] = []
 

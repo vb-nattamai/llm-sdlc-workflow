@@ -31,8 +31,8 @@ SYSTEM_PROMPT = load_prompt("testing_agent.md")
 
 
 class TestingAgent(BaseAgent):
-    def __init__(self, artifacts_dir: str = "./artifacts"):
-        super().__init__(name="Testing Agent", artifacts_dir=artifacts_dir)
+    def __init__(self, artifacts_dir: str = "./artifacts", generated_dir_name: str = "generated"):
+        super().__init__(name="Testing Agent", artifacts_dir=artifacts_dir, generated_dir_name=generated_dir_name)
 
     async def run(
         self,
@@ -231,7 +231,7 @@ Respond ONLY with the JSON object."""
             con.print("[dim]Cypress / npx not found — skipping Cypress run.[/dim]")
             return
 
-        generated_dir = os.path.join(self.artifacts_dir, "generated")
+        generated_dir = os.path.join(self.artifacts_dir, self.generated_dir_name)
         config_file = os.path.join(generated_dir, "cypress.config.ts")
         if not os.path.exists(config_file):
             con.print("[dim]No cypress.config.ts — skipping Cypress run.[/dim]")
@@ -240,8 +240,8 @@ Respond ONLY with the JSON object."""
         # Check if node_modules/cypress is installed
         cypress_bin = os.path.join(generated_dir, "node_modules", ".bin", "cypress")
         if not os.path.exists(cypress_bin):
-            con.print("[dim]Cypress not installed in generated/ — skipping run. "
-                      "Run `npm install cypress` in artifacts/generated/ to enable.[/dim]")
+            con.print(f"[dim]Cypress not installed in {self.generated_dir_name}/ — skipping run. "
+                      f"Run `npm install cypress` in artifacts/{self.generated_dir_name}/ to enable.[/dim]")
             return
 
         con.print("[cyan]🌲 Running Cypress e2e tests…[/cyan]")

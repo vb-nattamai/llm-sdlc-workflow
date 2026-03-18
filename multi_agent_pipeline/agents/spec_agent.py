@@ -35,8 +35,8 @@ SYSTEM_PROMPT = load_prompt("spec_agent.md")
 
 
 class SpecAgent(BaseAgent):
-    def __init__(self, artifacts_dir: str = "./artifacts"):
-        super().__init__(name="Spec Agent", artifacts_dir=artifacts_dir)
+    def __init__(self, artifacts_dir: str = "./artifacts", generated_dir_name: str = "generated"):
+        super().__init__(name="Spec Agent", artifacts_dir=artifacts_dir, generated_dir_name=generated_dir_name)
 
     async def run(
         self,
@@ -130,13 +130,13 @@ Produce JSON plan with every file's content = "__PENDING__". Valid json."""
     def _write_spec_files(self, artifact: GeneratedSpecArtifact) -> None:
         from rich.console import Console
         con = Console()
-        specs_dir = os.path.join(self.artifacts_dir, "generated", "specs")
+        specs_dir = os.path.join(self.artifacts_dir, self.generated_dir_name, "specs")
         os.makedirs(specs_dir, exist_ok=True)
         for spec_file in artifact.generated_spec_files:
             if spec_file.content in ("__PENDING__", ""):
                 continue
             safe_path = os.path.normpath(spec_file.path).lstrip(os.sep)
-            full_path = os.path.join(self.artifacts_dir, "generated", safe_path)
+            full_path = os.path.join(self.artifacts_dir, self.generated_dir_name, safe_path)
             os.makedirs(os.path.dirname(full_path), exist_ok=True)
             with open(full_path, "w") as fh:
                 fh.write(spec_file.content)

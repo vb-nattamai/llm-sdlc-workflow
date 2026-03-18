@@ -26,8 +26,8 @@ SYSTEM_PROMPT = load_prompt("review_agent.md")
 
 
 class ReviewAgent(BaseAgent):
-    def __init__(self, artifacts_dir: str = "./artifacts"):
-        super().__init__(name="Review Agent", artifacts_dir=artifacts_dir)
+    def __init__(self, artifacts_dir: str = "./artifacts", generated_dir_name: str = "generated"):
+        super().__init__(name="Review Agent", artifacts_dir=artifacts_dir, generated_dir_name=generated_dir_name)
 
     async def run(
         self,

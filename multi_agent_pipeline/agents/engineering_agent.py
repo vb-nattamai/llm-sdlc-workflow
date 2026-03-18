@@ -33,11 +33,11 @@ console = Console()
 
 
 class EngineeringAgent(BaseAgent):
-    def __init__(self, artifacts_dir: str = "./artifacts"):
-        super().__init__(name="Engineering Agent", artifacts_dir=artifacts_dir)
-        self.backend_agent = BackendAgent(artifacts_dir)
-        self.bff_agent = BffAgent(artifacts_dir)
-        self.frontend_agent = FrontendAgent(artifacts_dir)
+    def __init__(self, artifacts_dir: str = "./artifacts", generated_dir_name: str = "generated"):
+        super().__init__(name="Engineering Agent", artifacts_dir=artifacts_dir, generated_dir_name=generated_dir_name)
+        self.backend_agent = BackendAgent(artifacts_dir, generated_dir_name=generated_dir_name)
+        self.bff_agent = BffAgent(artifacts_dir, generated_dir_name=generated_dir_name)
+        self.frontend_agent = FrontendAgent(artifacts_dir, generated_dir_name=generated_dir_name)
 
     async def run(
         self,

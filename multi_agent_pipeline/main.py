@@ -28,7 +28,9 @@ Incremental development (--from-run):
 from __future__ import annotations
 
 import argparse
+import glob
 import os
+import re
 import sys
 from datetime import datetime
 from typing import Dict, List
@@ -118,6 +120,14 @@ Examples:
             "Skip all human review checkpoints and run the pipeline end-to-end without "
             "pausing. Useful for CI/CD or when you trust the output and want a fully "
             "unattended run. Human checkpoints are ENABLED by default."
+        )
+    )
+    parser.add_argument(
+        "--project-name", metavar="NAME",
+        help=(
+            "Name for the generated project directory (e.g. 'my_ecommerce_app'). "
+            "Generated code will be written to <output-dir>/<project-name>/. "
+            "If not provided, you will be prompted for a name at startup."
         )
     )
     return parser.parse_args()
@@ -232,13 +242,23 @@ def load_spec(args: argparse.Namespace) -> SpecArtifact | None:
 
 
 def load_existing_spec(from_run_dir: str) -> SpecArtifact | None:
-    """Load generated/specs/ from a previous run to enable incremental spec extension."""
-    specs_dir = os.path.join(from_run_dir, "generated", "specs")
-    if not os.path.isdir(specs_dir):
+    """Load <project>/specs/ from a previous run to enable incremental spec extension.
+
+    Searches for */specs/openapi.yaml (or .json) under from_run_dir so the project
+    name of the previous run does not need to be known in advance.
+    """
+    # Find the specs directory regardless of what the previous project name was
+    candidates = (
+        glob.glob(os.path.join(from_run_dir, "*", "specs", "openapi.yaml"))
+        + glob.glob(os.path.join(from_run_dir, "*", "specs", "openapi.json"))
+    )
+    if not candidates:
         console.print(
-            f"[red]--from-run: no generated/specs/ directory found in {from_run_dir}[/red]"
+            f"[red]--from-run: no <project>/specs/openapi.yaml found under {from_run_dir}[/red]"
         )
         sys.exit(1)
+
+    specs_dir = os.path.dirname(candidates[0])
 
     def _read(name: str) -> str | None:
         path = os.path.join(specs_dir, name)
@@ -286,6 +306,32 @@ def load_existing_spec(from_run_dir: str) -> SpecArtifact | None:
     )
 
 
+def _sanitize_project_name(name: str) -> str:
+    """Lowercase, spaces/dashes → underscores, keep alphanumeric + underscore only."""
+    name = name.strip().lower()
+    name = re.sub(r'[\s\-]+', '_', name)
+    name = re.sub(r'[^\w]', '', name)
+    return name or "generated"
+
+
+def _resolve_project_name(args: argparse.Namespace) -> str:
+    """Return the project name: from --project-name flag, TTY prompt, or default 'generated'."""
+    if getattr(args, 'project_name', None):
+        return _sanitize_project_name(args.project_name)
+    if sys.stdin.isatty() and not getattr(args, 'auto', False):
+        console.print(
+            "\n[bold yellow]What should the generated project be called?[/bold yellow]\n"
+            "[dim]This becomes the folder name inside your output directory.\n"
+            "Examples: hello_world, my_ecommerce_app, task_manager[/dim]"
+        )
+        raw = input("  Project name: ").strip()
+        if raw:
+            name = _sanitize_project_name(raw)
+            console.print(f"[green]  ✓ Using project name: [bold]{name}[/bold][/green]\n")
+            return name
+    return "generated"
+
+
 def get_requirements(args: argparse.Namespace) -> str:
     if args.requirements:
         with open(args.requirements) as f:
@@ -308,16 +354,19 @@ async def async_main(args: argparse.Namespace, requirements: str, spec, existing
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     artifacts_dir = args.output_dir or os.path.join("artifacts", f"run_{timestamp}")
     human_checkpoints = not getattr(args, "auto", False)
+    project_name = _resolve_project_name(args)
 
     console.print(Panel(
         f"[bold]Requirements preview:[/bold]\n{requirements[:300]}"
         f"{'...' if len(requirements) > 300 else ''}\n\n"
-        f"[dim]Artifacts → {artifacts_dir}[/dim]\n"
-        f"[dim]Human checkpoints: {'enabled (4 review pauses)' if human_checkpoints else 'disabled (--auto)'}[/dim]",
+        f"[dim]Project name      : {project_name}[/dim]\n"
+        f"[dim]Generated code    : {artifacts_dir}/{project_name}/[/dim]\n"
+        f"[dim]Artifacts         : {artifacts_dir}/[/dim]\n"
+        f"[dim]Human checkpoints : {'enabled (4 review pauses)' if human_checkpoints else 'disabled (--auto)'}[/dim]",
         title="Starting Pipeline",
     ))
 
-    pipeline = Pipeline(artifacts_dir=artifacts_dir, human_checkpoints=human_checkpoints)
+    pipeline = Pipeline(artifacts_dir=artifacts_dir, human_checkpoints=human_checkpoints, project_name=project_name)
     result = await pipeline.run(requirements, spec=spec, existing_spec=existing_spec)
     pipeline.print_summary(result)
     return 0 if result.passed else 1

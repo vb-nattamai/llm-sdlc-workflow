@@ -21,8 +21,8 @@ SYSTEM_PROMPT = load_prompt("discovery_agent.md")
 
 
 class DiscoveryAgent(BaseAgent):
-    def __init__(self, artifacts_dir: str = "./artifacts"):
-        super().__init__(name="Discovery Agent", artifacts_dir=artifacts_dir)
+    def __init__(self, artifacts_dir: str = "./artifacts", generated_dir_name: str = "generated"):
+        super().__init__(name="Discovery Agent", artifacts_dir=artifacts_dir, generated_dir_name=generated_dir_name)
 
     async def run(self, requirements: str) -> DiscoveryArtifact:
         """
