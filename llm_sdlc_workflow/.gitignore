@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Pipeline outputs — never commit generated code or LLM history
+artifacts/
+
+# Environment / secrets
+.env
+.env.*
+*.env
+!*.env.example
+
+# Private keys & certificates
+*.key
+*.pem
+*.p12
+*.pfx
+*.crt
+*.cer
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
