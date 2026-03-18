@@ -437,6 +437,87 @@ Two environment variables let you swap the provider without touching any code:
 
 When `PIPELINE_API_KEY` is set, `GITHUB_TOKEN` and `gh auth token` are ignored entirely.
 
+##### Setting variables in your GitHub repository
+
+API keys must **never** be committed to source code. GitHub provides two secure storage mechanisms depending on whether the value is sensitive:
+
+| Type | Use for | Visible in logs? | CLI to set |
+|---|---|---|---|
+| **Secret** | `PIPELINE_API_KEY` (any API key) | ❌ Always masked | `gh secret set` |
+| **Variable** | `PIPELINE_BASE_URL`, `PIPELINE_MODEL` (non-sensitive config) | ✅ Visible | `gh variable set` |
+
+**Via GitHub CLI (fastest):**
+
+```bash
+# Store the API key as an encrypted secret (value is never shown in logs)
+gh secret set PIPELINE_API_KEY --body "xai-xxxxxxxxxxxxxxxxxxxx"
+
+# Store the endpoint and model as plain variables (non-sensitive)
+gh variable set PIPELINE_BASE_URL --body "https://api.x.ai/v1"
+gh variable set PIPELINE_MODEL    --body "grok-3-beta"
+```
+
+**Via GitHub web UI:**
+
+1. Go to your repository → **Settings** → **Secrets and variables** → **Actions**
+2. For `PIPELINE_API_KEY` → click **New repository secret**
+3. For `PIPELINE_BASE_URL` and `PIPELINE_MODEL` → switch to the **Variables** tab → click **New repository variable**
+
+**Using them in a GitHub Actions workflow:**
+
+```yaml
+# .github/workflows/pipeline.yml
+name: Run LLM SDLC Pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      requirements:
+        description: "Path to requirements file"
+        default: "hello_world_requirements.txt"
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install -r requirements.txt
+
+      - name: Run pipeline
+        env:
+          PIPELINE_API_KEY:  ${{ secrets.PIPELINE_API_KEY }}
+          PIPELINE_BASE_URL: ${{ vars.PIPELINE_BASE_URL }}
+          PIPELINE_MODEL:    ${{ vars.PIPELINE_MODEL }}
+        run: |
+          python3.11 main.py \
+            --requirements ${{ github.event.inputs.requirements }} \
+            --auto
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pipeline-artifacts
+          path: artifacts/
+```
+
+> `--auto` is required in CI — it skips all human review checkpoints since stdin is not a TTY. Alternatively, the pipeline skips checkpoints automatically when stdin is not a TTY (piped input, Docker, GitHub Actions), so `--auto` is only needed if you want to be explicit.
+
+**For GitHub Models (default) in CI — no secret needed:**
+
+If you are using the default GitHub Models endpoint, you do not need `PIPELINE_API_KEY` at all. GitHub Actions provides `GITHUB_TOKEN` automatically with `models:read` permission:
+
+```yaml
+      - name: Run pipeline (GitHub Models — no API key needed)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # automatically provided
+        run: python3.11 main.py --requirements reqs.txt --auto
+```
+
 ---
 
 #### Available models on GitHub Models (no code changes, no extra account)
