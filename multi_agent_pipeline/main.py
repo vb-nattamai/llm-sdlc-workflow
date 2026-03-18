@@ -17,7 +17,7 @@ Spec-driven development (via config file):
     python3.11 main.py --config pipeline.yaml
 
   CLI flags always override values from the config file.
-  The Testing Agent derives test cases solely from requirements (IntentArtifact).
+  The Testing Agent derives test cases solely from requirements (DiscoveryArtifact).
 
 Incremental development (--from-run):
   Loads the existing OpenAPI + DDL from a previous pipeline run and extends it

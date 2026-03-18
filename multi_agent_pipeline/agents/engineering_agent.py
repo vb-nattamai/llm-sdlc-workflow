@@ -18,9 +18,9 @@ from rich.console import Console
 
 from models.artifacts import (
     ArchitectureArtifact,
+    DiscoveryArtifact,
     EngineeringArtifact,
     GeneratedSpecArtifact,
-    IntentArtifact,
     ReviewFeedback,
     ServiceArtifact,
 )
@@ -41,7 +41,7 @@ class EngineeringAgent(BaseAgent):
 
     async def run(
         self,
-        intent: IntentArtifact,
+        intent: DiscoveryArtifact,
         architecture: ArchitectureArtifact,
         contract: GeneratedSpecArtifact,
         review_feedback: Optional[ReviewFeedback] = None,
@@ -63,7 +63,7 @@ class EngineeringAgent(BaseAgent):
 
     async def apply_review_feedback(
         self,
-        intent: IntentArtifact,
+        intent: DiscoveryArtifact,
         architecture: ArchitectureArtifact,
         current: EngineeringArtifact,
         feedback: ReviewFeedback,

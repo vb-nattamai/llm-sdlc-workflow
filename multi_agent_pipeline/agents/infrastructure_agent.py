@@ -24,7 +24,7 @@ from models.artifacts import (
     ArchitectureArtifact,
     EngineeringArtifact,
     InfrastructureArtifact,
-    IntentArtifact,
+    DiscoveryArtifact,
     ReviewFeedback,
 )
 from .base_agent import BaseAgent, load_prompt
@@ -40,7 +40,7 @@ class InfrastructureAgent(BaseAgent):
 
     async def run(
         self,
-        intent: IntentArtifact,
+        intent: DiscoveryArtifact,
         architecture: ArchitectureArtifact,
         engineering: EngineeringArtifact,
         review_feedback: Optional[ReviewFeedback] = None,
@@ -147,7 +147,7 @@ This is a json response."""
 
     async def apply_review_feedback(
         self,
-        intent: IntentArtifact,
+        intent: DiscoveryArtifact,
         architecture: ArchitectureArtifact,
         engineering: EngineeringArtifact,
         current: InfrastructureArtifact,

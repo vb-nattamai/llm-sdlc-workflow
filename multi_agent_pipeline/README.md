@@ -17,7 +17,7 @@ Runs on **GitHub Models** via your **GitHub Copilot licence** — no separate AP
          ▼
 ┌──────────────────┐
 │ Discovery Agent  │  Analyses goals, constraints, success criteria, risks, scope
-└────────┬─────────┘        → 01_intent_artifact.json
+└────────┬─────────┘        → 01_discovery_artifact.json
          │
          ▼
 ┌─────────────────────┐  ◄── optional: --spec / --config (OpenAPI, SQL, tech/arch constraints)
@@ -80,7 +80,7 @@ Runs on **GitHub Models** via your **GitHub Copilot licence** — no separate AP
 
 | Agent | Role | Output |
 |---|---|---|
-| **Discovery Agent** | Extracts requirements, goals, constraints, scope, risks, and success criteria from raw text | `IntentArtifact` |
+| **Discovery Agent** | Extracts requirements, goals, constraints, scope, risks, and success criteria from raw text | `DiscoveryArtifact` |
 | **Architecture Agent** | Designs the system: components, data flow, API contracts, security model | `ArchitectureArtifact` |
 | **Spec Agent** | Generates the **forward contract** (OpenAPI 3.0 + SQL DDL) that all engineering implements against | `GeneratedSpecArtifact` |
 | **Engineering Agent** | Orchestrates BE + BFF + FE sub-agents in parallel via `asyncio.gather` | `EngineeringArtifact` |
@@ -132,6 +132,134 @@ The pipeline is fully automated, but these are the natural **human-in-the-loop**
 | 7 | **Incremental Contract Approval** | Spec Agent (--from-run) | Before extending a live API contract, a human must confirm which additions are backwards-compatible |
 
 > **Future:** The pipeline will emit a `HUMAN_CHECKPOINT` event at each of these stages so a CI/CD system can pause and request review via GitHub PR comment, Slack message, or JIRA ticket.
+
+### Stopping the Pipeline for Human Review
+
+The pipeline runs end-to-end by default. To pause at a checkpoint, use `Ctrl+C` at any time — the run directory and all artifacts written so far are preserved on disk.
+
+```
+artifacts/run_20260318_120000/
+├── 01_discovery_artifact.json     ← safe to stop after this
+├── 02_architecture_artifact.json  ← safe to stop after this
+├── 04_generated_spec_artifact.json  ← contract lives here — most important checkpoint
+└── generated/specs/
+    ├── openapi.yaml               ← review and edit this before continuing
+    └── schema.sql                 ← review and edit this before continuing
+```
+
+### Checkpoint 1 — After Discovery (requirements validation)
+
+Let the Discovery Agent run, then stop and inspect its output:
+
+```bash
+# Run Discovery only by interrupting immediately after step 1
+python3.11 main.py --requirements reqs.txt --output-dir ./artifacts/my_run
+# └─ Ctrl+C after you see: "✅ Discovery complete"
+
+# Read what the agent understood
+cat artifacts/my_run/01_discovery_artifact.json | python3 -m json.tool | less
+```
+
+If the agent missed requirements or misunderstood scope, update your requirements file, then restart:
+
+```bash
+# Edit requirements to correct misunderstandings
+vim reqs.txt
+
+# Restart from scratch with the corrected requirements
+python3.11 main.py --requirements reqs.txt --output-dir ./artifacts/my_run_v2
+```
+
+### Checkpoint 2 — After Architecture (design sign-off)
+
+```bash
+python3.11 main.py --requirements reqs.txt --output-dir ./artifacts/my_run
+# └─ Ctrl+C after: "✅ Architecture complete"
+
+cat artifacts/my_run/02_architecture_artifact.json | python3 -m json.tool | less
+```
+
+To override architecture decisions, encode them as constraints and restart:
+
+```bash
+python3.11 main.py \
+  --requirements reqs.txt \
+  --arch-constraints "Use event-sourcing with Kafka, no REST between services" \
+  --tech-constraints "Kotlin + Ktor, not Spring Boot" \
+  --output-dir ./artifacts/my_run_v2
+```
+
+### Checkpoint 3 — After Spec Agent (API contract approval) — most critical
+
+The forward contract is the most important human gate. Once downstream teams start coding against it, changes are expensive.
+
+```bash
+python3.11 main.py --requirements reqs.txt --output-dir ./artifacts/my_run
+# └─ Ctrl+C after: "✅ Spec complete"
+
+# Review the generated contract
+cat artifacts/my_run/generated/specs/openapi.yaml
+cat artifacts/my_run/generated/specs/schema.sql
+```
+
+**Edit the spec files directly** to add, remove, or rename endpoints/tables, then resume by passing the edited run as the base:
+
+```bash
+# After editing generated/specs/openapi.yaml and schema.sql:
+python3.11 main.py \
+  --requirements reqs.txt \
+  --from-run ./artifacts/my_run \
+  --output-dir ./artifacts/my_run_approved
+```
+
+The Spec Agent will treat your edited files as the approved contract and Engineering will implement exactly what you specified.
+
+### Checkpoint 4 — After Review Agent (security sign-off)
+
+```bash
+python3.11 main.py --requirements reqs.txt --output-dir ./artifacts/my_run
+# └─ Ctrl+C after review loop completes
+
+# Read the security audit
+cat artifacts/my_run/04_review_artifact.json | python3 -m json.tool | grep -A5 'critical_issues'
+```
+
+If you have organisation-specific security findings to inject, add them as architecture constraints and re-run engineering only by starting a new run that extends the same spec contract:
+
+```bash
+python3.11 main.py \
+  --requirements reqs.txt \
+  --from-run ./artifacts/my_run \
+  --arch-constraints "All endpoints require mutual TLS; secrets must use AWS Secrets Manager" \
+  --output-dir ./artifacts/my_run_secure
+```
+
+### Checkpoint 5 — Incremental feature development (chain of runs)
+
+Every `--from-run` continues the contract chain. The recommended workflow for a live system:
+
+```bash
+# Sprint 1 — initial build
+python3.11 main.py --requirements sprint1.txt --output-dir ./artifacts/sprint1
+# └─ Human review at: 01_discovery_artifact.json, 02_architecture_artifact.json,
+#    generated/specs/openapi.yaml, 04_review_artifact.json
+
+# Sprint 2 — new feature, must not break sprint 1 API
+python3.11 main.py \
+  --requirements sprint2.txt \
+  --from-run ./artifacts/sprint1 \
+  --output-dir ./artifacts/sprint2
+# └─ Spec Agent marks all sprint1 paths x-existing: true
+#    Human approves only the new paths before Engineering runs
+
+# Sprint 3 — another increment
+python3.11 main.py \
+  --requirements sprint3.txt \
+  --from-run ./artifacts/sprint2 \
+  --output-dir ./artifacts/sprint3
+```
+
+> **Tip:** Commit each run's `generated/specs/` directory to git. Your API contract history becomes part of your codebase, with full `git diff` between sprints.
 
 ---
 
@@ -281,7 +409,7 @@ Each run creates a timestamped directory under `artifacts/`:
 ```
 artifacts/run_20260318_120000/
 ├── 00_pipeline_report.json              # overall pass/fail + summary metrics
-├── 01_intent_artifact.json              # Discovery Agent output
+├── 01_discovery_artifact.json           # Discovery Agent output
 ├── 02_architecture_artifact.json        # Architecture Agent output
 ├── 03_engineering_artifact.json         # Engineering Agent (merged) output
 ├── 03a_backend_artifact.json            # Backend sub-agent output
@@ -341,7 +469,7 @@ multi_agent_pipeline/
 │   └── testing_agent.md
 ├── agents/
 │   ├── base_agent.py           # shared: GitHub Models query, retry, chunked gen, I/O
-│   ├── discovery_agent.py      # DiscoveryAgent → IntentArtifact
+│   ├── discovery_agent.py      # DiscoveryAgent → DiscoveryArtifact
 │   ├── architecture_agent.py
 │   ├── spec_agent.py           # forward contract generator
 │   ├── engineering_agent.py    # orchestrator → runs BE + BFF + FE in parallel
@@ -352,7 +480,7 @@ multi_agent_pipeline/
 │   ├── review_agent.py
 │   └── testing_agent.py
 └── models/
-    ├── artifacts.py            # all Pydantic models: IntentArtifact, GeneratedSpecArtifact, etc.
+    ├── artifacts.py            # all Pydantic models: DiscoveryArtifact, GeneratedSpecArtifact, etc.
     └── __init__.py
 ```
 

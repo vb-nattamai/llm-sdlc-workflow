@@ -29,7 +29,7 @@ class SpecArtifact(BaseModel):
     """
     Optional technical specifications provided by the user.
     Passed to Architecture and Engineering agents as constraints.
-    Testing Agent does NOT use this — it verifies against IntentArtifact only.
+    Testing Agent does NOT use this — it verifies against DiscoveryArtifact only.
     """
 
     api_spec: Optional[str] = None          # OpenAPI / Swagger YAML or JSON
@@ -43,8 +43,8 @@ class SpecArtifact(BaseModel):
 # ─── Intent Agent ───────────────────────────────────────────────────────────
 
 
-class IntentArtifact(BaseModel):
-    """Output of the Intent Agent — the distilled understanding of what needs to be built."""
+class DiscoveryArtifact(BaseModel):
+    """Output of the Discovery Agent — the distilled understanding of what needs to be built."""
 
     raw_requirements: str
     requirements: List[str]

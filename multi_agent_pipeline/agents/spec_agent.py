@@ -26,7 +26,7 @@ from typing import Optional
 from models.artifacts import (
     ArchitectureArtifact,
     GeneratedSpecArtifact,
-    IntentArtifact,
+    DiscoveryArtifact,
     SpecArtifact,
 )
 from .base_agent import BaseAgent, load_prompt
@@ -40,7 +40,7 @@ class SpecAgent(BaseAgent):
 
     async def run(
         self,
-        intent: IntentArtifact,
+        intent: DiscoveryArtifact,
         architecture: ArchitectureArtifact,
         existing_spec: Optional[SpecArtifact] = None,
     ) -> GeneratedSpecArtifact:

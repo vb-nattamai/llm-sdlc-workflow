@@ -2,7 +2,7 @@
 Pipeline Orchestrator — coordinates all agents.
 
 Flow:
-  1. IntentAgent          → IntentArtifact
+  1. DiscoveryAgent       → DiscoveryArtifact
   2. ArchitectureAgent    → ArchitectureArtifact
   3. TestingAgent         → TestingArtifact (stage: architecture)
   4. SpecAgent             → GeneratedSpecArtifact (forward contract: OpenAPI + DDL)
@@ -42,10 +42,10 @@ from agents import (
 )
 from models.artifacts import (
     ArchitectureArtifact,
+    DiscoveryArtifact,
     EngineeringArtifact,
     GeneratedSpecArtifact,
     InfrastructureArtifact,
-    IntentArtifact,
     ReviewArtifact,
     SpecArtifact,
     TestingArtifact,
@@ -63,7 +63,7 @@ class PipelineResult:
     completed_at: Optional[str] = None
     artifacts_dir: str = "./artifacts"
 
-    intent: Optional[IntentArtifact] = None
+    intent: Optional[DiscoveryArtifact] = None
     architecture: Optional[ArchitectureArtifact] = None
     generated_spec: Optional[GeneratedSpecArtifact] = None
     engineering: Optional[EngineeringArtifact] = None

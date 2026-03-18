@@ -16,7 +16,7 @@ from models.artifacts import (
     ArchitectureArtifact,
     EngineeringArtifact,
     InfrastructureArtifact,
-    IntentArtifact,
+    DiscoveryArtifact,
     ReviewArtifact,
     ReviewFeedback,
 )
@@ -31,7 +31,7 @@ class ReviewAgent(BaseAgent):
 
     async def run(
         self,
-        intent: IntentArtifact,
+        intent: DiscoveryArtifact,
         architecture: ArchitectureArtifact,
         engineering: EngineeringArtifact,
         infrastructure: InfrastructureArtifact,
