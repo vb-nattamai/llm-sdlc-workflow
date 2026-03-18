@@ -11,6 +11,7 @@ Usage:
     python3.11 main.py --tech-constraints "Python FastAPI, PostgreSQL, Redis"
     python3.11 main.py --arch-constraints "Must be deployable on AWS Lambda"
     python3.11 main.py --from-run artifacts/run_20260318_120000  # extend existing spec
+    python3.11 main.py --model gpt-4o-mini                       # use a cheaper/faster model
 
 Spec-driven development (via config file):
   Copy pipeline.yaml, fill in the spec section, then:
@@ -130,6 +131,15 @@ Examples:
             "If not provided, you will be prompted for a name at startup."
         )
     )
+    parser.add_argument(
+        "--model", metavar="MODEL",
+        default=os.getenv("PIPELINE_MODEL", "gpt-4o"),
+        help=(
+            "LLM model name to use for all agents "
+            "(default: gpt-4o, or PIPELINE_MODEL env var). "
+            "Examples: gpt-4o, gpt-4o-mini, o3-mini"
+        )
+    )
     return parser.parse_args()
 
 
@@ -157,6 +167,10 @@ def _apply_config(args: argparse.Namespace) -> None:
     # output_dir
     if not args.output_dir and cfg.get("output_dir"):
         args.output_dir = cfg["output_dir"]
+
+    # model — only apply if user didn't pass --model explicitly and env var not set
+    if args.model == os.getenv("PIPELINE_MODEL", "gpt-4o") and cfg.get("model"):
+        args.model = cfg["model"]
 
     # spec block
     spec_cfg = cfg.get("spec") or {}
@@ -356,12 +370,16 @@ async def async_main(args: argparse.Namespace, requirements: str, spec, existing
     human_checkpoints = not getattr(args, "auto", False)
     project_name = _resolve_project_name(args)
 
+    # Thread model selection through the env var that base_agent.py reads
+    os.environ["PIPELINE_MODEL"] = args.model
+
     console.print(Panel(
         f"[bold]Requirements preview:[/bold]\n{requirements[:300]}"
         f"{'...' if len(requirements) > 300 else ''}\n\n"
         f"[dim]Project name      : {project_name}[/dim]\n"
         f"[dim]Generated code    : {artifacts_dir}/{project_name}/[/dim]\n"
         f"[dim]Artifacts         : {artifacts_dir}/[/dim]\n"
+        f"[dim]Model             : {args.model}[/dim]\n"
         f"[dim]Human checkpoints : {'enabled (4 review pauses)' if human_checkpoints else 'disabled (--auto)'}[/dim]",
         title="Starting Pipeline",
     ))
