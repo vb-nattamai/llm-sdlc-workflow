@@ -1,10 +1,14 @@
 """
-Intent Agent — understands raw requirements and produces a structured IntentArtifact.
+Discovery Agent — analyses raw requirements and produces a structured IntentArtifact.
+
+Position in the SDLC: FIRST — before Architecture, Spec, and Engineering.
 
 Responsibilities:
   - Parse and clarify ambiguous requirements
-  - Identify user goals, constraints, and success criteria
-  - Document what is in/out of scope
+  - Uncover implicit goals the user may not have stated explicitly
+  - Identify constraints (technical, business, regulatory, timeline)
+  - Define scope boundaries (in-scope / out-of-scope)
+  - Surface risks and uncertainties early
   - Record every interpretation decision with rationale
 """
 
@@ -13,12 +17,12 @@ from __future__ import annotations
 from models.artifacts import IntentArtifact
 from .base_agent import BaseAgent, load_prompt
 
-SYSTEM_PROMPT = load_prompt("intent_agent.md")
+SYSTEM_PROMPT = load_prompt("discovery_agent.md")
 
 
-class IntentAgent(BaseAgent):
+class DiscoveryAgent(BaseAgent):
     def __init__(self, artifacts_dir: str = "./artifacts"):
-        super().__init__(name="Intent Agent", artifacts_dir=artifacts_dir)
+        super().__init__(name="Discovery Agent", artifacts_dir=artifacts_dir)
 
     async def run(self, requirements: str) -> IntentArtifact:
         """

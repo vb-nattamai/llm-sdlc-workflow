@@ -1,0 +1,36 @@
+Build a "Hello World" full-stack web application with a three-tier architecture:
+
+1. **Backend (BE)** — A REST API service
+   - GET /api/hello → returns JSON: { "message": "Hello, World!", "timestamp": "<ISO datetime>", "source": "backend" }
+   - GET /actuator/health → returns Spring Boot Actuator health response
+
+2. **Backend For Frontend (BFF)** — An aggregation/gateway service
+   - Calls the Backend's GET /api/hello endpoint using WebClient
+   - Enriches the response by adding "layer": "bff"
+   - Exposes GET /api/hello → returns the enriched response
+   - GET /actuator/health → returns Spring Boot Actuator health response
+
+3. **Frontend (FE)** — A React single-page application
+   - Fetches GET /api/hello from the BFF via Axios on component mount
+   - Displays the message, timestamp, and layer in a styled React component
+   - Built with React 18 + TypeScript + Vite
+   - Served by Nginx on port 80 inside the container
+
+Technology stack (MANDATORY):
+- Backend: Kotlin with Spring Boot 3, Gradle (build.gradle.kts)
+- BFF: Kotlin with Spring Boot 3 + Spring WebFlux (WebClient), Gradle
+- Frontend: React 18 + TypeScript + Vite, served by Nginx
+- All services containerised with multi-stage Dockerfiles
+
+Non-functional requirements:
+- All three services must be Dockerised and start with a single: docker compose up --build
+- Services must communicate using Docker Compose service names (not localhost)
+- Frontend is the only service exposed on a host port (3000)
+- BFF and Backend are internal-only — not reachable from the host, only within the Docker network
+- Use non-root users in all Docker images
+
+Success criteria:
+- docker compose up --build completes without errors
+- Visiting http://localhost:3000 shows the Hello World message fetched live through the BFF → Backend chain
+- GET http://localhost:3000/api/hello returns HTTP 200 and JSON with message, timestamp, layer fields
+- All three health endpoints return HTTP 200 within 30 seconds of startup

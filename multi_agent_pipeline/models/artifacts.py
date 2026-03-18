@@ -85,10 +85,22 @@ class ArchitectureArtifact(BaseModel):
     scalability_considerations: List[str]
     trade_offs: List[str]
     spec_compliance_notes: List[str] = []  # how user specs were applied
-    design_decisions: List[DecisionRecord]
+    design_decisions: List[DecisionRecord] = []
 
 
 # ─── Engineering Agent ───────────────────────────────────────────────────────
+
+
+class ReviewFeedback(BaseModel):
+    """
+    Structured feedback from the Review Agent directed at Engineering or Infrastructure.
+    Passed back so each agent can apply fixes in the review loop.
+    """
+    iteration: int = 1
+    critical_issues: List[str] = []      # must fix before passing
+    high_issues: List[str] = []          # should fix
+    suggestions: List[str] = []          # nice-to-have
+    passed: bool = False                 # True only when no critical issues remain
 
 
 class TechStack(BaseModel):
@@ -113,21 +125,47 @@ class ImplementationStep(BaseModel):
 
 
 class EngineeringArtifact(BaseModel):
-    """Output of the Engineering Agent — tech stack and implementation plan."""
+    """Combined output from all engineering sub-agents (monorepo)."""
 
-    backend_tech: TechStack
+    # Set by sub-agents; None on the combined artifact from the orchestrator
+    service_name: Optional[str] = None   # "backend" | "bff" | "frontend" | None
+
+    # Per-service outputs (keyed by service name: "backend" | "bff" | "frontend")
+    services: Dict[str, "ServiceArtifact"] = {}
+
+    # Flat convenience fields (merged from services by EngineeringAgent.assemble())
+    backend_tech: Optional[TechStack] = None
     frontend_tech: Optional[TechStack] = None
-    infrastructure: str
-    generated_files: List[FileSpec]
-    implementation_steps: List[ImplementationStep]
+    infrastructure: str = ""
+    generated_files: List[FileSpec] = []     # all files across all services
+    implementation_steps: List[ImplementationStep] = []
     environment_variables: Dict[str, str] = {}
     api_endpoints: List[str] = []
     data_models: List[str] = []
-    spec_compliance_notes: List[str] = []  # how user specs were applied
-    decisions: List[DecisionRecord]
+    spec_compliance_notes: List[str] = []
+    decisions: List[DecisionRecord] = []
+    review_iteration: int = 1
+    review_feedback_applied: List[str] = []
 
 
-# ─── Infrastructure Agent ────────────────────────────────────────────────────
+class ServiceArtifact(BaseModel):
+    """Output of one engineering sub-agent: Backend, BFF, or Frontend."""
+
+    service: str   # "backend" | "bff" | "frontend"
+    tech_stack: Optional[TechStack] = None
+    generated_files: List[FileSpec] = []
+    api_endpoints: List[str] = []
+    data_models: List[str] = []
+    environment_variables: Dict[str, str] = {}
+    implementation_steps: List[ImplementationStep] = []
+    spec_compliance_notes: List[str] = []
+    decisions: List[DecisionRecord] = []
+    review_iteration: int = 1
+    review_feedback_applied: List[str] = []
+
+
+# Resolve forward reference
+EngineeringArtifact.model_rebuild()
 
 
 class IaCFile(BaseModel):
@@ -149,7 +187,9 @@ class InfrastructureArtifact(BaseModel):
     service_dependencies: List[str] = []  # e.g. ["postgres", "redis"]
     build_notes: List[str] = []
     spec_compliance_notes: List[str] = []
-    decisions: List[DecisionRecord]
+    decisions: List[DecisionRecord] = []
+    review_iteration: int = 1
+    review_feedback_applied: List[str] = []
 
     # Runtime fields — populated by the pipeline after the container starts (not from LLM)
     base_url: Optional[str] = None
@@ -168,20 +208,19 @@ class Issue(BaseModel):
     cwe_id: Optional[str] = None
 
 
-class ReviewArtifact(BaseModel):
-    """Output of the Review Agent — quality assessment."""
+class ReviewArtifact(ReviewFeedback):
+    """Output of the Review Agent — quality assessment with structured loop-feedback fields."""
 
-    overall_score: int = Field(ge=0, le=100)
-    security_score: int = Field(ge=0, le=100)
-    reliability_score: int = Field(ge=0, le=100)
-    maintainability_score: int = Field(ge=0, le=100)
-    performance_score: int = Field(ge=0, le=100)
-    issues: List[Issue]
-    strengths: List[str]
-    critical_fixes_required: List[str]
-    recommendations: List[str]
-    passed: bool
-    decisions: List[DecisionRecord]
+    overall_score: int = Field(default=0, ge=0, le=100)
+    security_score: int = Field(default=0, ge=0, le=100)
+    reliability_score: int = Field(default=0, ge=0, le=100)
+    maintainability_score: int = Field(default=0, ge=0, le=100)
+    performance_score: int = Field(default=0, ge=0, le=100)
+    issues: List[Issue] = []
+    strengths: List[str] = []
+    critical_fixes_required: List[str] = []   # kept for backward compat
+    recommendations: List[str] = []
+    decisions: List[DecisionRecord] = []
 
 
 # ─── Testing Agent ───────────────────────────────────────────────────────────
@@ -225,10 +264,53 @@ class TestingArtifact(BaseModel):
     stage: str
     test_cases: List[TestCase]
     http_test_cases: List[HttpTestCase] = []   # live HTTP tests (infrastructure stage)
+    cypress_spec_files: List[FileSpec] = []    # Cypress e2e specs written to disk
     coverage_areas: List[str]
     uncovered_areas: List[str]
     findings: List[str]
     blocking_issues: List[str]
     passed: bool
     recommendations: List[str]
-    decisions: List[DecisionRecord]
+    decisions: List[DecisionRecord] = []
+
+
+# ─── Spec Agent (forward contract for spec-driven development) ───────────────
+
+
+class GeneratedSpecArtifact(BaseModel):
+    """
+    Forward-generated formal specifications derived from intent + architecture.
+
+    Produced by SpecAgent BEFORE engineering runs. All engineering sub-agents
+    (BE, BFF, FE) implement against this shared contract, ensuring they stay
+    consistent with each other.
+
+    The spec files are also written to generated/specs/ so future pipeline runs
+    can load them with --from-run for spec-driven incremental development:
+
+      Run 1 (greenfield):
+        python main.py --requirements hello-world.txt
+        → generates code + generated/specs/
+
+      Run 2+ (spec-driven, adds a new feature):
+        python main.py --requirements new-feature.txt --from-run artifacts/run_20260318_XYZ
+        → loads existing OpenAPI + DDL, extends rather than replaces
+    """
+
+    # Formal contracts consumed by engineering sub-agents
+    openapi_spec: str = ""           # full OpenAPI 3.0 YAML
+    database_schema: str = ""        # full SQL DDL (all services share one DB or separate schemas)
+    tech_stack_constraints: str = "" # "Must use Kotlin Spring Boot 3, React 18 TS Vite …"
+    architecture_constraints: str = ""  # "Must follow three-tier monorepo pattern …"
+
+    # Monorepo topology
+    monorepo_services: List[str] = []         # ["backend", "bff", "frontend"]
+    service_ports: Dict[str, int] = {}        # {"backend": 8081, "bff": 8080, "frontend": 3000}
+    shared_models: List[str] = []             # DTO / entity names referenced by multiple services
+
+    # Spec files written to generated/specs/
+    generated_spec_files: List[FileSpec] = []
+
+    # Short human-readable summary for the usage guide
+    usage_guide: str = ""
+

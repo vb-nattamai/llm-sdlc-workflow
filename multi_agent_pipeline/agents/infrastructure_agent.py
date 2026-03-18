@@ -25,6 +25,7 @@ from models.artifacts import (
     EngineeringArtifact,
     InfrastructureArtifact,
     IntentArtifact,
+    ReviewFeedback,
 )
 from .base_agent import BaseAgent, load_prompt
 
@@ -42,13 +43,28 @@ class InfrastructureAgent(BaseAgent):
         intent: IntentArtifact,
         architecture: ArchitectureArtifact,
         engineering: EngineeringArtifact,
+        review_feedback: Optional[ReviewFeedback] = None,
+        iteration: int = 1,
+        skip_start: bool = False,
     ) -> InfrastructureArtifact:
         """
-        Generate IaC, write files, start containers, and wait for the service
-        to be healthy. Returns an InfrastructureArtifact with base_url set if
-        the container started successfully.
+        Generate IaC via chunked LLM calls, write files, start containers,
+        and wait for the service to be healthy.
         """
-        user_message = f"""Generate Infrastructure as Code to containerise this application.
+        feedback_section = ""
+        if review_feedback:
+            lines = [
+                f"\n\n## Review Feedback (iteration {review_feedback.iteration}) — MUST be addressed"
+            ]
+            if review_feedback.critical_issues:
+                lines.append("### CRITICAL:")
+                lines.extend(f"- {i}" for i in review_feedback.critical_issues)
+            if review_feedback.high_issues:
+                lines.append("### HIGH:")
+                lines.extend(f"- {i}" for i in review_feedback.high_issues)
+            feedback_section = "\n".join(lines)
+
+        plan_message = f"""Generate Infrastructure as Code to containerise this application.
 
 ## Intent Summary
 {self._compact(intent)}
@@ -56,26 +72,58 @@ class InfrastructureAgent(BaseAgent):
 ## Architecture Summary
 {self._compact(architecture)}
 
-## Engineering Summary
+## Engineering Summary (stack already generated)
 {self._compact(engineering)}
+{feedback_section}
 
 The generated application files already exist in the working directory.
-Produce a Dockerfile and docker-compose.yml so the full stack starts with:
+Produce Dockerfiles and docker-compose.yml so the full stack starts with:
   docker compose up --build
 
-Respond ONLY with the JSON block."""
+Return JSON with iac_files where every file's content is set to \"__PENDING__\".
+This is a json response."""
 
-        artifact = await self._query_and_parse(
-            system=SYSTEM_PROMPT,
-            user_message=user_message,
-            model_class=InfrastructureArtifact,
+        fill_message_tmpl = (
+            "Write the COMPLETE content for the IaC file at path: {path}\n"
+            "Purpose: {purpose}\n\n"
+            "## Context\n"
+            "Backend: Kotlin/Java Spring Boot 3 (Gradle) | Frontend: React 18 + Vite (Node)\n"
+            "Architecture: {arch_style}\n\n"
+            "Return JSON: {{\"content\": \"<full file text>\"}}\n"
+            "No truncation, no placeholders. Valid json response."
         )
+
+        artifact = await self._query_and_parse_chunked(
+            system=SYSTEM_PROMPT,
+            plan_message=plan_message,
+            file_keys=["iac_files"],
+            model_class=InfrastructureArtifact,
+            fill_message_tmpl=fill_message_tmpl,
+            fill_context={
+                "arch_style": getattr(architecture, "architecture_style", "microservices"),
+            },
+        )
+
+        artifact.review_iteration = iteration
+        if review_feedback:
+            artifact.review_feedback_applied = (
+                list(review_feedback.critical_issues) + list(review_feedback.high_issues)
+            )
 
         # Write IaC files alongside the generated source code
         generated_dir = os.path.join(self.artifacts_dir, "generated")
         self._write_iac_files(artifact, generated_dir)
 
-        # Build and start the containers
+        if not skip_start:
+            artifact = await self.start_service(artifact)
+
+        self.save_artifact(artifact, "06_infrastructure_artifact.json")
+        self.save_history()
+        return artifact
+
+    async def start_service(self, artifact: InfrastructureArtifact) -> InfrastructureArtifact:
+        """Start containers for an already-generated IaC artifact."""
+        generated_dir = os.path.join(self.artifacts_dir, "generated")
         started = await self._start_containers(generated_dir)
         if started:
             base_url = f"http://localhost:{artifact.primary_service_port}"
@@ -85,24 +133,41 @@ Respond ONLY with the JSON block."""
             if healthy:
                 artifact.base_url = base_url
                 artifact.container_running = True
-                console.print(
-                    f"[bold green]✅ Application is live at {base_url}[/bold green]"
-                )
+                console.print(f"[bold green]✅ Application is live at {base_url}[/bold green]")
             else:
                 console.print(
-                    f"[yellow]⚠ Containers are up but health check at "
-                    f"{base_url}{artifact.health_check_path} did not respond within "
-                    f"{artifact.startup_timeout_seconds}s. Live tests will be skipped.[/yellow]"
+                    f"[yellow]⚠ Health check at {base_url}{artifact.health_check_path} "
+                    f"did not respond within {artifact.startup_timeout_seconds}s.[/yellow]"
                 )
         else:
             console.print(
-                "[yellow]⚠ Container startup failed or Docker is not available. "
-                "Live tests will be skipped.[/yellow]"
+                "[yellow]⚠ Container startup failed or Docker is not available.[/yellow]"
             )
-
-        self.save_artifact(artifact, "06_infrastructure_artifact.json")
-        self.save_history()
         return artifact
+
+    async def apply_review_feedback(
+        self,
+        intent: IntentArtifact,
+        architecture: ArchitectureArtifact,
+        engineering: EngineeringArtifact,
+        current: InfrastructureArtifact,
+        feedback: ReviewFeedback,
+    ) -> InfrastructureArtifact:
+        """Re-run IaC generation with review feedback. Stops + restarts containers."""
+        console.print(
+            f"[yellow]🔄 Infrastructure: applying review feedback "
+            f"(iteration {current.review_iteration} → {current.review_iteration + 1})[/yellow]"
+        )
+        if current.container_running:
+            await self.stop_containers()
+        return await self.run(
+            intent=intent,
+            architecture=architecture,
+            engineering=engineering,
+            review_feedback=feedback,
+            iteration=current.review_iteration + 1,
+            skip_start=True,  # containers start once after review loop completes
+        )
 
     # ─── IaC file writing ────────────────────────────────────────────────────
 

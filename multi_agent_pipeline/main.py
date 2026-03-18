@@ -10,6 +10,7 @@ Usage:
     python3.11 main.py --spec api.yaml --spec schema.sql  # multiple spec files
     python3.11 main.py --tech-constraints "Python FastAPI, PostgreSQL, Redis"
     python3.11 main.py --arch-constraints "Must be deployable on AWS Lambda"
+    python3.11 main.py --from-run artifacts/run_20260318_120000  # extend existing spec
 
 Spec-driven development (via config file):
   Copy pipeline.yaml, fill in the spec section, then:
@@ -17,6 +18,11 @@ Spec-driven development (via config file):
 
   CLI flags always override values from the config file.
   The Testing Agent derives test cases solely from requirements (IntentArtifact).
+
+Incremental development (--from-run):
+  Loads the existing OpenAPI + DDL from a previous pipeline run and extends it
+  with new endpoints/tables only.  Existing paths get x-existing markers so
+  sub-agents cannot break a running API.
 """
 
 from __future__ import annotations
@@ -97,6 +103,14 @@ Examples:
     parser.add_argument(
         "--arch-constraints", metavar="STRING",
         help='Architecture constraints, e.g. "Must run on AWS Lambda, serverless"'
+    )
+    parser.add_argument(
+        "--from-run", metavar="DIR",
+        help=(
+            "Path to a previous pipeline run directory. Loads existing OpenAPI + DDL "
+            "from generated/specs/ and passes them to the Spec Agent so the new run "
+            "EXTENDS the existing contract instead of starting from scratch."
+        )
     )
     return parser.parse_args()
 
@@ -209,6 +223,61 @@ def load_spec(args: argparse.Namespace) -> SpecArtifact | None:
     return spec
 
 
+def load_existing_spec(from_run_dir: str) -> SpecArtifact | None:
+    """Load generated/specs/ from a previous run to enable incremental spec extension."""
+    specs_dir = os.path.join(from_run_dir, "generated", "specs")
+    if not os.path.isdir(specs_dir):
+        console.print(
+            f"[red]--from-run: no generated/specs/ directory found in {from_run_dir}[/red]"
+        )
+        sys.exit(1)
+
+    def _read(name: str) -> str | None:
+        path = os.path.join(specs_dir, name)
+        if os.path.exists(path):
+            with open(path) as fh:
+                return fh.read()
+        return None
+
+    openapi = _read("openapi.yaml") or _read("openapi.json")
+    schema = _read("schema.sql")
+    tech = _read("tech_constraints.txt")
+    arch = _read("arch_constraints.txt")
+
+    if not openapi and not schema:
+        console.print(
+            f"[red]--from-run: neither openapi.yaml nor schema.sql found in {specs_dir}[/red]"
+        )
+        sys.exit(1)
+
+    parts = []
+    if openapi:
+        parts.append(f"openapi ({len(openapi.splitlines())} lines)")
+    if schema:
+        parts.append(f"schema.sql ({len(schema.splitlines())} lines)")
+    if tech:
+        parts.append("tech_constraints.txt")
+    if arch:
+        parts.append("arch_constraints.txt")
+
+    console.print(Panel(
+        f"Incremental spec-driven mode.\n"
+        f"Loaded from: {specs_dir}\n"
+        f"Existing specs: {', '.join(parts)}\n\n"
+        "Spec Agent will EXTEND the existing contract.\n"
+        "Existing API paths get x-existing markers — sub-agents must not alter them.",
+        title="[bold yellow]--from-run: Extending Existing Spec[/bold yellow]",
+    ))
+
+    return SpecArtifact(
+        api_spec=openapi,
+        database_schema=schema,
+        tech_stack_constraints=tech,
+        architecture_constraints=arch,
+        source_files=[specs_dir],
+    )
+
+
 def get_requirements(args: argparse.Namespace) -> str:
     if args.requirements:
         with open(args.requirements) as f:
@@ -227,7 +296,7 @@ def get_requirements(args: argparse.Namespace) -> str:
     return EXAMPLE_REQUIREMENTS
 
 
-async def async_main(args: argparse.Namespace, requirements: str, spec) -> int:
+async def async_main(args: argparse.Namespace, requirements: str, spec, existing_spec) -> int:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     artifacts_dir = args.output_dir or os.path.join("artifacts", f"run_{timestamp}")
 
@@ -239,7 +308,7 @@ async def async_main(args: argparse.Namespace, requirements: str, spec) -> int:
     ))
 
     pipeline = Pipeline(artifacts_dir=artifacts_dir)
-    result = await pipeline.run(requirements, spec=spec)
+    result = await pipeline.run(requirements, spec=spec, existing_spec=existing_spec)
     pipeline.print_summary(result)
     return 0 if result.passed else 1
 
@@ -253,9 +322,10 @@ def main() -> int:
         return 1
 
     spec = load_spec(args)
+    existing_spec = load_existing_spec(args.from_run) if args.from_run else None
 
     try:
-        return anyio.run(async_main, args, requirements, spec)
+        return anyio.run(async_main, args, requirements, spec, existing_spec)
     except KeyboardInterrupt:
         console.print("\n[yellow]Pipeline interrupted.[/yellow]")
         return 130

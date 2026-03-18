@@ -7,11 +7,17 @@ from .artifacts import (
     TechStack,
     FileSpec,
     ImplementationStep,
+    ReviewFeedback,
+    ServiceArtifact,
     EngineeringArtifact,
+    IaCFile,
+    InfrastructureArtifact,
     Issue,
     ReviewArtifact,
+    HttpTestCase,
     TestCase,
     TestingArtifact,
+    GeneratedSpecArtifact,
 )
 
 __all__ = [
@@ -23,9 +29,15 @@ __all__ = [
     "TechStack",
     "FileSpec",
     "ImplementationStep",
+    "ReviewFeedback",
+    "ServiceArtifact",
     "EngineeringArtifact",
+    "IaCFile",
+    "InfrastructureArtifact",
     "Issue",
     "ReviewArtifact",
+    "HttpTestCase",
     "TestCase",
     "TestingArtifact",
+    "GeneratedSpecArtifact",
 ]
