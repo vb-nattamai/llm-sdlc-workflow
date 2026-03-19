@@ -109,6 +109,37 @@ class SpecArtifact(BaseModel):
 # ─── Discovery Agent ───────────────────────────────────────────────────────────
 
 
+def _coerce_str_field(v: Any) -> str:  # noqa: PLR0911
+    """Coerce a string field that the LLM returned as a dict or list.
+
+    The LLM sometimes returns structured objects for fields that the schema
+    defines as plain strings, e.g.::
+
+        "scope": {"in_scope": [...], "out_of_scope": [...]}
+        "domain_context": {"primary": "...", "secondary": "..."}
+
+    Convert them to a readable string so validation never fails.
+    """
+    if isinstance(v, str):
+        return v
+    if isinstance(v, dict):
+        # Try common single-value keys first
+        for key in ("description", "value", "summary", "text", "content"):
+            if key in v and isinstance(v[key], str):
+                return v[key]
+        # Flatten to "key: value, key: value" representation
+        parts = []
+        for k, val in v.items():
+            if isinstance(val, list):
+                parts.append(f"{k}: {', '.join(str(i) for i in val)}")
+            else:
+                parts.append(f"{k}: {val}")
+        return "; ".join(parts)
+    if isinstance(v, list):
+        return ", ".join(str(i) for i in v)
+    return str(v) if v is not None else ""
+
+
 class DiscoveryArtifact(BaseModel):
     """Output of the Discovery Agent — the distilled understanding of what needs to be built."""
 
@@ -123,6 +154,16 @@ class DiscoveryArtifact(BaseModel):
     scope: str
     risks: List[str] = []
     decisions: List[DecisionRecord] = []
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_str_fields(cls, v: Any) -> Any:
+        """Coerce scope and domain_context when the LLM returns a dict/list instead of str."""
+        if isinstance(v, dict):
+            for field in ("scope", "domain_context", "raw_requirements"):
+                if field in v and not isinstance(v[field], str):
+                    v[field] = _coerce_str_field(v[field])
+        return v
 
     @field_validator(
         "requirements", "user_goals", "constraints", "success_criteria",

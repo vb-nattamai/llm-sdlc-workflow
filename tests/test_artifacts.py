@@ -157,6 +157,44 @@ class TestDiscoveryArtifact:
         assert a.domain_context == "E-commerce"
         assert a.scope == "Backend only"
 
+    # ── LLM coercion: dict/list returned for str fields ──────────────────────
+
+    def test_scope_as_dict_with_in_scope_out_of_scope(self):
+        """LLM returns scope as {in_scope:[...], out_of_scope:[...]} — must coerce to str."""
+        a = self._minimal(scope={"in_scope": ["REST API endpoints", "CRUD ops"], "out_of_scope": ["Auth"]})
+        assert isinstance(a.scope, str)
+        assert "in_scope" in a.scope or "REST API" in a.scope
+
+    def test_scope_as_plain_dict_with_description(self):
+        a = self._minimal(scope={"description": "Backend only"})
+        assert a.scope == "Backend only"
+
+    def test_scope_as_list(self):
+        a = self._minimal(scope=["Backend", "API"])
+        assert isinstance(a.scope, str)
+        assert "Backend" in a.scope
+
+    def test_domain_context_as_dict(self):
+        a = self._minimal(domain_context={"primary": "E-commerce", "secondary": "B2B"})
+        assert isinstance(a.domain_context, str)
+        assert "E-commerce" in a.domain_context
+
+    def test_domain_context_as_list(self):
+        a = self._minimal(domain_context=["E-commerce", "retail"])
+        assert isinstance(a.domain_context, str)
+
+    def test_scope_as_int_coerces(self):
+        a = self._minimal(scope=42)
+        assert a.scope == "42"
+
+    def test_constraints_as_dicts_with_name_key(self):
+        a = self._minimal(constraints=[{"name": "Must use H2"}, {"description": "Port 8080"}])
+        assert a.constraints == ["Must use H2", "Port 8080"]
+
+    def test_success_criteria_as_dicts(self):
+        a = self._minimal(success_criteria=[{"description": "All tests pass"}, "200 OK"])
+        assert a.success_criteria == ["All tests pass", "200 OK"]
+
 
 # ─── ArchitectureArtifact ─────────────────────────────────────────────────────
 
