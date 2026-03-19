@@ -514,20 +514,67 @@ class BaseAgent:
         raise ValueError(f"Could not extract 'content' field: {text[:200]}")
 
     def _extract_json(self, text: str) -> Dict:
-        m = re.search(r"```json\s*(.*?)\s*```", text, re.DOTALL)
+        # 1. Raw parse first — model sometimes returns plain JSON without fences
+        stripped = text.strip()
+        if stripped.startswith(("{", "[")):
+            try:
+                return json.loads(stripped)
+            except json.JSONDecodeError:
+                pass
+
+        # 2. Greedy fence match — .*  (not .*?) so we stop at the LAST ``` in the
+        #    text rather than the first.  This handles cases where the JSON value
+        #    itself contains embedded ```json ... ``` blocks (e.g. requirements text
+        #    with code examples), which would prematurely terminate a non-greedy match.
+        m = re.search(r"```json\s*(.*)\s*```", text, re.DOTALL)
         if m:
-            return json.loads(m.group(1))
-        m = re.search(r"```\s*([\[{].*?)\s*```", text, re.DOTALL)
+            try:
+                return json.loads(m.group(1))
+            except json.JSONDecodeError:
+                pass
+
+        m = re.search(r"```\s*([\[{].*)\s*```", text, re.DOTALL)
         if m:
-            return json.loads(m.group(1))
-        try:
-            return json.loads(text.strip())
-        except json.JSONDecodeError:
-            pass
-        start = text.find("{")
-        end = text.rfind("}") + 1
-        if 0 <= start < end:
-            return json.loads(text[start:end])
+            try:
+                return json.loads(m.group(1))
+            except json.JSONDecodeError:
+                pass
+
+        # 3. Brace-balanced extraction — scan character-by-character to find the
+        #    outermost JSON object/array, correctly ignoring braces inside strings.
+        for open_ch, close_ch in (("{", "}"), ("[", "]")):
+            start = text.find(open_ch)
+            if start == -1:
+                continue
+            depth = 0
+            in_str = False
+            esc = False
+            end = -1
+            for i, ch in enumerate(text[start:], start):
+                if esc:
+                    esc = False
+                    continue
+                if ch == "\\" and in_str:
+                    esc = True
+                    continue
+                if ch == '"':
+                    in_str = not in_str
+                    continue
+                if in_str:
+                    continue
+                if ch == open_ch:
+                    depth += 1
+                elif ch == close_ch:
+                    depth -= 1
+                    if depth == 0:
+                        end = i + 1
+                        break
+            if end != -1:
+                try:
+                    return json.loads(text[start:end])
+                except json.JSONDecodeError:
+                    pass
+
         raise ValueError("No JSON object found in agent response.")
 
     def _add_to_history(self, role: str, content: str) -> None:

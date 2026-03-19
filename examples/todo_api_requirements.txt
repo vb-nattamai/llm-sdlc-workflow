@@ -1,0 +1,56 @@
+Build a minimal **Todo List REST API** — backend service only, no BFF, no frontend.
+
+## Endpoints
+
+| Method | Path            | Description                          |
+|--------|-----------------|--------------------------------------|
+| GET    | /api/todos      | List all todos (returns JSON array)  |
+| POST   | /api/todos      | Create a new todo                    |
+| GET    | /api/todos/{id} | Get a single todo by id              |
+| PUT    | /api/todos/{id} | Update a todo (title and/or done)    |
+| DELETE | /api/todos/{id} | Delete a todo                        |
+| GET    | /actuator/health| Spring Boot health check             |
+
+## Todo data model
+
+```json
+{
+  "id": 1,
+  "title": "Buy groceries",
+  "done": false,
+  "createdAt": "2026-03-19T10:00:00Z"
+}
+```
+
+## Request bodies
+
+**POST /api/todos**
+```json
+{ "title": "Buy groceries" }
+```
+
+**PUT /api/todos/{id}**
+```json
+{ "title": "Buy groceries", "done": true }
+```
+
+## Technology stack (MANDATORY)
+
+- Language: Kotlin 1.9
+- Framework: Spring Boot 3.3, Gradle Kotlin DSL, JDK 21
+- Database: H2 in-memory (no external DB needed)
+- Containerised with a multi-stage Dockerfile (gradle:8-jdk21 → eclipse-temurin:21-jre-alpine)
+
+## Non-functional requirements
+
+- Single service, port **8080** exposed on the host
+- Non-root Docker user
+- `docker compose up --build` starts the service
+- All config via environment variables, no hardcoded secrets
+
+## Success criteria
+
+- `docker compose up --build` completes without errors
+- `GET http://localhost:8080/api/todos` returns HTTP 200 and an empty JSON array on a fresh start
+- `POST http://localhost:8080/api/todos` with `{"title":"test"}` returns HTTP 201 and the created todo
+- `GET http://localhost:8080/actuator/health` returns HTTP 200 within 30 seconds of startup

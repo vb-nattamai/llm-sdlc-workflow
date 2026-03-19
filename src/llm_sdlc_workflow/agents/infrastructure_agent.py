@@ -156,27 +156,48 @@ This is a json response."""
 
     async def apply_review_feedback(
         self,
-        intent: DiscoveryArtifact,
-        architecture: ArchitectureArtifact,
-        engineering: EngineeringArtifact,
+        intent: DiscoveryArtifact,        # noqa: ARG002 — kept for call-site API compat
+        architecture: ArchitectureArtifact,  # noqa: ARG002
+        engineering: EngineeringArtifact,   # noqa: ARG002
         current: InfrastructureArtifact,
         feedback: ReviewFeedback,
     ) -> InfrastructureArtifact:
-        """Re-run IaC generation with review feedback. Stops + restarts containers."""
+        """Re-generate IaC with targeted patching from existing file content.
+
+        Each IaC file (Dockerfile, docker-compose.yml, nginx.conf…) is sent to
+        the LLM together with the specific review issues so it can make surgical
+        fixes rather than re-imagining everything from scratch.
+        """
+        next_iter = current.review_iteration + 1
         console.print(
             f"[yellow]🔄 Infrastructure: applying review feedback "
-            f"(iteration {current.review_iteration} → {current.review_iteration + 1})[/yellow]"
+            f"(iteration {current.review_iteration} → {next_iter})[/yellow]"
         )
         if current.container_running:
             await self.stop_containers()
-        return await self.run(
-            intent=intent,
-            architecture=architecture,
-            engineering=engineering,
-            review_feedback=feedback,
-            iteration=current.review_iteration + 1,
-            skip_start=True,  # containers start once after review loop completes
+
+        artifact = await self._patch_files_chunked(
+            system=SYSTEM_PROMPT,
+            existing_artifact=current,
+            feedback=feedback,
+            model_class=InfrastructureArtifact,
+            file_keys=["iac_files"],
         )
+
+        artifact.review_iteration = next_iter
+        artifact.review_feedback_applied = (
+            list(feedback.critical_issues) + list(feedback.high_issues)
+        )
+        # Always skip container start during review iterations —
+        # containers start once after the review loop completes.
+        artifact.phase = "plan"
+
+        generated_dir = os.path.join(self.artifacts_dir, self.generated_dir_name)
+        self._write_iac_files(artifact, generated_dir)
+
+        self.save_artifact(artifact, "06a_infrastructure_plan_artifact.json")
+        self.save_history()
+        return artifact
 
     # ─── IaC file writing ────────────────────────────────────────────────────
 
