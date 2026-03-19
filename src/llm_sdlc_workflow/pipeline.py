@@ -29,6 +29,7 @@ import os
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime
+from enum import Enum
 from typing import List, Optional
 
 from rich.console import Console
@@ -61,11 +62,26 @@ from llm_sdlc_workflow.models.artifacts import (
 console = Console()
 
 MAX_REVIEW_ITERATIONS = 3
+MAX_ARCH_ITERATIONS = 3      # max architecture re-design iterations before giving up
 MAX_INFRA_TEST_RETRIES = 2   # max re-runs of failed services after Stage 2 testing
 
 
 class PipelineHaltError(Exception):
     """Raised when the pipeline cannot continue due to unresolved failures."""
+
+
+class HumanDecision(str, Enum):
+    """Decision returned by _await_human checkpoints.
+
+    CONTINUE   — proceed to the next pipeline stage (default / Enter)
+    FORCE_LOOP — human wants another loop iteration even if the check passed (r)
+    STOP_LOOP  — human wants to exit the loop early even if still failing  (f)
+    ABORT      — stop the entire pipeline immediately                       (a)
+    """
+    CONTINUE   = "continue"
+    FORCE_LOOP = "force_loop"
+    STOP_LOOP  = "stop_loop"
+    ABORT      = "abort"
 
 
 @dataclass
@@ -176,12 +192,105 @@ class Pipeline:
                 artifact_path=os.path.join(self.artifacts_dir, "01_discovery_artifact.json"),
                 edit_hint="If requirements were misunderstood, update your requirements file and restart.",
             )
-            # ── Step 2: Architecture ────────────────────────────────────────
-            self._step_header("Step 2", "Architecture Agent", "Designing system architecture")
-            result.architecture = await self.architecture_agent.run(result.intent, spec)
-            self._step_done("Architecture", len(result.architecture.components), "components designed")
+            # ── Step 2: Architecture fix loop ──────────────────────────────────
+            # Runs Architecture Agent → Testing Stage 1 repeatedly until the
+            # architecture is clean (no blocking issues) or MAX_ARCH_ITERATIONS hit.
+            # Human can force another iteration (r) or stop the loop early (f).
+            _arch_test_feedback: Optional[TestingArtifact] = None
+            for _arch_iter in range(1, MAX_ARCH_ITERATIONS + 1):
+                _redesign_sfx = (
+                    f" (re-design {_arch_iter}/{MAX_ARCH_ITERATIONS})"
+                    if _arch_iter > 1 else ""
+                )
+                if _arch_test_feedback is None:
+                    self._step_header(
+                        f"Step 2{_redesign_sfx}", "Architecture Agent",
+                        "Designing system architecture",
+                    )
+                    result.architecture = await self.architecture_agent.run(result.intent, spec)
+                else:
+                    self._step_header(
+                        f"Step 2{_redesign_sfx}", "Architecture Agent",
+                        f"Re-designing architecture — {len(_arch_test_feedback.blocking_issues)} blocker(s) to fix",
+                    )
+                    result.architecture = await self.architecture_agent.apply_test_feedback(
+                        result.intent, result.architecture, _arch_test_feedback, spec
+                    )
+                self._step_done(
+                    "Architecture", len(result.architecture.components), "components designed"
+                )
+
+                self._step_header(
+                    f"Testing [Stage 1, iter {_arch_iter}]", "Testing Agent",
+                    "Verifying architecture satisfies all requirements",
+                )
+                result.test_architecture = await self.testing_agent.run(
+                    stage="architecture",
+                    intent=result.intent,
+                    architecture=result.architecture,
+                )
+                self._testing_status(f"Architecture Stage 1 (iter {_arch_iter})", result.test_architecture)
+
+                _arch_blockers = result.test_architecture.blocking_issues
+                if result.test_architecture.passed:
+                    _decision = await self._await_human(
+                        checkpoint=f"✅ Architecture Validated — iteration {_arch_iter}",
+                        details=[
+                            f"Components  : {len(result.architecture.components)}",
+                            f"Style       : {result.architecture.architecture_style}",
+                            f"Test cases  : {len(result.test_architecture.test_cases)} — all passing",
+                            f"Coverage    : {', '.join(result.test_architecture.coverage_areas[:5]) or 'n/a'}",
+                            "",
+                            "↵ Enter — continue to spec generation",
+                            "r — force another architecture review iteration",
+                        ],
+                        artifact_path=os.path.join(self.artifacts_dir, "05a_testing_architecture.json"),
+                        loop_controls=True,
+                    )
+                    if _decision == HumanDecision.FORCE_LOOP and _arch_iter < MAX_ARCH_ITERATIONS:
+                        console.print(
+                            "[yellow]🔄 Human requested additional architecture iteration…[/yellow]\n"
+                        )
+                        _arch_test_feedback = None
+                        continue
+                    break  # architecture clean — exit loop
+                else:
+                    _decision = await self._await_human(
+                        checkpoint=(
+                            f"❌ Architecture Testing Failed"
+                            f" — iteration {_arch_iter}/{MAX_ARCH_ITERATIONS}"
+                        ),
+                        details=[
+                            f"Blockers    : {len(_arch_blockers)}",
+                            *[f"  ⛔ {b[:100]}" for b in _arch_blockers[:5]],
+                            "",
+                            "↵ Enter — auto re-design and re-test",
+                            "f — stop loop and continue with current architecture",
+                            "a — abort pipeline",
+                        ],
+                        artifact_path=os.path.join(self.artifacts_dir, "05a_testing_architecture.json"),
+                        loop_controls=True,
+                    )
+                    if _decision == HumanDecision.STOP_LOOP:
+                        console.print(
+                            "[yellow]⏩ Human stopped architecture fix loop — "
+                            "continuing with current architecture.[/yellow]\n"
+                        )
+                        break
+                    if _arch_iter < MAX_ARCH_ITERATIONS:
+                        console.print(
+                            f"[yellow]🔄 Architecture blockers found — re-designing "
+                            f"(iteration {_arch_iter + 1}/{MAX_ARCH_ITERATIONS})…[/yellow]\n"
+                        )
+                        _arch_test_feedback = result.test_architecture
+                    else:
+                        console.print(
+                            f"[red]⚠  Max architecture iterations ({MAX_ARCH_ITERATIONS}) reached. "
+                            "Continuing with best effort.[/red]\n"
+                        )
 
             # ── Step 3: Spec Agent — forward contract ───────────────────────
+            # Runs after architecture is locked in by the fix loop above.
             self._step_header("Step 3", "Spec Agent", "Generating forward contract (OpenAPI + DDL)")
             result.generated_spec = await self.spec_agent.run(
                 result.intent, result.architecture, existing_spec
@@ -217,16 +326,6 @@ class Pipeline:
                     "  Once downstream teams depend on these paths, changes are expensive."
                 ),
             )
-
-            # ── Step 4: Testing — architecture + spec validation ─────────────
-            self._step_header("Step 4", "Testing Agent", "Verifying architecture + spec vs requirements")
-            result.test_architecture = await self.testing_agent.run(
-                stage="architecture",
-                intent=result.intent,
-                architecture=result.architecture,
-                generated_spec=result.generated_spec,
-            )
-            self._testing_status("Architecture + Spec", result.test_architecture)
 
             # ── Step 5: Engineering + Infrastructure plan in PARALLEL ───────
             self._step_header(
@@ -269,9 +368,56 @@ class Pipeline:
                     console.print(
                         f"[bold green]✅ Review passed on iteration {iteration}![/bold green]\n"
                     )
+                    _rdecision = await self._await_human(
+                        checkpoint=f"✅ Review Passed — iteration {iteration}",
+                        details=[
+                            f"Score       : {review.overall_score}/100",
+                            f"Critical    : {len(review.critical_issues)} (none)",
+                            f"High        : {len(review.high_issues)}",
+                            f"Total issues: {len(review.issues)}",
+                            "",
+                            "↵ Enter — continue to infrastructure",
+                            "r — force another review iteration",
+                        ],
+                        artifact_path=os.path.join(
+                            self.artifacts_dir, f"05_review_artifact_iter{iteration}.json"
+                        ),
+                        loop_controls=True,
+                    )
+                    if _rdecision == HumanDecision.FORCE_LOOP and iteration < MAX_REVIEW_ITERATIONS:
+                        console.print(
+                            "[yellow]🔄 Human requested additional review iteration…[/yellow]\n"
+                        )
+                        previous_feedback = review
+                        continue
                     break
 
                 if iteration < MAX_REVIEW_ITERATIONS:
+                    _rdecision = await self._await_human(
+                        checkpoint=(
+                            f"❌ Review Failed — iteration {iteration}/{MAX_REVIEW_ITERATIONS}"
+                        ),
+                        details=[
+                            f"Score       : {review.overall_score}/100",
+                            f"Critical    : {len(review.critical_issues)}",
+                            *[f"  ⛔ {i[:100]}" for i in review.critical_issues[:4]],
+                            f"High        : {len(review.high_issues)}",
+                            "",
+                            "↵ Enter — apply feedback and re-generate automatically",
+                            "f — stop review loop and continue with current code",
+                            "a — abort pipeline",
+                        ],
+                        artifact_path=os.path.join(
+                            self.artifacts_dir, f"05_review_artifact_iter{iteration}.json"
+                        ),
+                        loop_controls=True,
+                    )
+                    if _rdecision == HumanDecision.STOP_LOOP:
+                        console.print(
+                            "[yellow]⏩ Human stopped review loop — "
+                            "continuing with current code.[/yellow]\n"
+                        )
+                        break
                     console.print(
                         f"[yellow]🔄 Review failed — applying feedback and re-generating "
                         f"(iteration {iteration + 1}/{MAX_REVIEW_ITERATIONS})…[/yellow]"
@@ -373,11 +519,62 @@ class Pipeline:
             self._testing_status("Infrastructure (live + Cypress)", result.test_infrastructure)
 
             # ── Stage-2 retry loop for failed services ───────────────────────
+            # Human can inspect the initial Stage-2 result before any retry begins.
+            _infra_force_retry = False  # True → enter retry even when initial test passed
+            _infra_stopped = False       # True → human pressed f to exit the loop early
+
+            _init_blockers = result.test_infrastructure.blocking_issues
+            _init_failed   = result.test_infrastructure.failed_services
+            if result.test_infrastructure.passed:
+                _idecision = await self._await_human(
+                    checkpoint="✅ Infrastructure Tests Passed (Stage 2)",
+                    details=[
+                        f"HTTP passed : {sum(1 for t in result.test_infrastructure.http_test_cases if t.status == 'passed')}/{len(result.test_infrastructure.http_test_cases)}",
+                        f"Cypress     : {len(result.test_infrastructure.cypress_spec_files)} spec(s)",
+                        "Blockers    : 0",
+                        "",
+                        "↵ Enter — continue to final testing",
+                        "r — force a service re-run",
+                    ],
+                    artifact_path=os.path.join(self.artifacts_dir, "07b_testing_infra.json"),
+                    loop_controls=True,
+                )
+                if _idecision == HumanDecision.FORCE_LOOP:
+                    console.print(
+                        "[yellow]🔄 Human requested infrastructure service re-run…[/yellow]\n"
+                    )
+                    _infra_force_retry = True
+            else:
+                _idecision = await self._await_human(
+                    checkpoint="❌ Infrastructure Tests Failed (Stage 2)",
+                    details=[
+                        f"Failed svcs : {', '.join(_init_failed) or 'n/a'}",
+                        f"Blockers    : {len(_init_blockers)}",
+                        *[f"  ⛔ {b[:100]}" for b in _init_blockers[:5]],
+                        "",
+                        "↵ Enter — auto-retry failed services",
+                        "f — stop retry loop and continue with current state",
+                        "a — abort pipeline",
+                    ],
+                    artifact_path=os.path.join(self.artifacts_dir, "07b_testing_infra.json"),
+                    loop_controls=True,
+                )
+                if _idecision == HumanDecision.STOP_LOOP:
+                    console.print(
+                        "[yellow]⏩ Human stopped infra retry loop — "
+                        "continuing with current state.[/yellow]\n"
+                    )
+                    _infra_stopped = True
+
             for _retry in range(1, MAX_INFRA_TEST_RETRIES + 1):
-                if result.test_infrastructure.passed:
+                if _infra_stopped:
                     break
+                if result.test_infrastructure.passed and not _infra_force_retry:
+                    break
+                _was_forced = _infra_force_retry
+                _infra_force_retry = False  # consume one-shot flag
                 failed_svcs = result.test_infrastructure.failed_services
-                if not failed_svcs:
+                if not failed_svcs and not _was_forced:
                     break   # no specific services to target — don't retry blindly
                 console.print(
                     f"[yellow]🔄 Stage-2 retry {_retry}/{MAX_INFRA_TEST_RETRIES} — "
@@ -403,8 +600,71 @@ class Pipeline:
                     f"Infrastructure retry {_retry} (live + Cypress)",
                     result.test_infrastructure,
                 )
+                # Human checkpoint after each retry result
+                _retry_blockers = result.test_infrastructure.blocking_issues
+                _retry_failed   = result.test_infrastructure.failed_services
+                if result.test_infrastructure.passed:
+                    _idecision = await self._await_human(
+                        checkpoint=f"✅ Infrastructure Tests Passed (retry {_retry})",
+                        details=[
+                            f"HTTP passed : {sum(1 for t in result.test_infrastructure.http_test_cases if t.status == 'passed')}/{len(result.test_infrastructure.http_test_cases)}",
+                            f"Cypress     : {len(result.test_infrastructure.cypress_spec_files)} spec(s)",
+                            "",
+                            "↵ Enter — continue to final testing",
+                            "r — force another service re-run",
+                        ],
+                        artifact_path=os.path.join(
+                            self.artifacts_dir, f"07b_testing_infra_retry{_retry}.json"
+                        ),
+                        loop_controls=True,
+                    )
+                    if _idecision == HumanDecision.FORCE_LOOP and _retry < MAX_INFRA_TEST_RETRIES:
+                        console.print(
+                            "[yellow]🔄 Human requested another infrastructure re-run…[/yellow]\n"
+                        )
+                        _infra_force_retry = True
+                        continue
+                    break  # tests clean — exit loop
+                else:
+                    _idecision = await self._await_human(
+                        checkpoint=(
+                            f"❌ Infrastructure Tests Still Failing"
+                            f" (retry {_retry}/{MAX_INFRA_TEST_RETRIES})"
+                        ),
+                        details=[
+                            f"Failed svcs : {', '.join(_retry_failed) or 'n/a'}",
+                            f"Blockers    : {len(_retry_blockers)}",
+                            *[f"  ⛔ {b[:100]}" for b in _retry_blockers[:5]],
+                            "",
+                            *(["↵ Enter — retry again"] if _retry < MAX_INFRA_TEST_RETRIES
+                              else ["↵ Enter — continue with failures (best effort)"]),
+                            "f — stop retry loop and continue with current state",
+                            "a — abort pipeline",
+                        ],
+                        artifact_path=os.path.join(
+                            self.artifacts_dir, f"07b_testing_infra_retry{_retry}.json"
+                        ),
+                        loop_controls=True,
+                    )
+                    if _idecision == HumanDecision.STOP_LOOP:
+                        console.print(
+                            "[yellow]⏩ Human stopped infra retry loop — "
+                            "continuing with current state.[/yellow]\n"
+                        )
+                        _infra_stopped = True
+                        break
+                    if _retry < MAX_INFRA_TEST_RETRIES:
+                        console.print(
+                            f"[yellow]🔄 Infrastructure failures remain — retrying "
+                            f"({_retry + 1}/{MAX_INFRA_TEST_RETRIES})…[/yellow]\n"
+                        )
+                    else:
+                        console.print(
+                            f"[red]⚠  Max infra retries ({MAX_INFRA_TEST_RETRIES}) reached. "
+                            "Continuing with best effort.[/red]\n"
+                        )
             else:
-                if not result.test_infrastructure.passed:
+                if not result.test_infrastructure.passed and not _infra_stopped:
                     raise PipelineHaltError(
                         f"Infrastructure tests still failing after {MAX_INFRA_TEST_RETRIES} "
                         f"retries. Blocking: {result.test_infrastructure.blocking_issues}"
@@ -440,29 +700,49 @@ class Pipeline:
         details: list,
         artifact_path: str,
         edit_hint: Optional[str] = None,
-    ) -> None:
+        loop_controls: bool = False,
+    ) -> HumanDecision:
         """Pause the pipeline and wait for human review.
 
-        Skipped automatically when:
+        Returns a HumanDecision so callers can act on the human's choice:
+          CONTINUE   — proceed normally (Enter or s)
+          FORCE_LOOP — human wants another loop iteration even if passing (r)
+          STOP_LOOP  — human wants to exit the current loop early (f)
+          ABORT      — stop the pipeline immediately (a)
+
+        Skipped automatically (returns CONTINUE) when:
           - human_checkpoints=False  (--auto flag)
           - stdin is not a TTY      (CI/CD / piped input)
+
+        loop_controls=True adds the r / f options for use inside retry loops.
         """
         if not self.human_checkpoints or not sys.stdin.isatty():
-            return
+            return HumanDecision.CONTINUE
 
         body = "\n".join(f"  {d}" for d in details)
         hint_block = (
             f"\n\n  [dim]💡 {edit_hint.replace(chr(10), chr(10) + '  ')}[/dim]"
             if edit_hint else ""
         )
+        if loop_controls:
+            controls = (
+                f"  [bold]↵ Enter[/bold] — proceed    "
+                f"[bold]r[/bold] — force re-run    "
+                f"[bold]f[/bold] — finish/stop loop    "
+                f"[bold]a[/bold] — abort pipeline"
+            )
+        else:
+            controls = (
+                f"  [bold]↵ Enter[/bold] — proceed    "
+                f"[bold]s[/bold] — skip checkpoint    "
+                f"[bold]a[/bold] — abort pipeline"
+            )
         console.print(Panel(
             f"[bold yellow]⏸  Pipeline paused — human review required[/bold yellow]\n\n"
             f"{body}"
             f"{hint_block}\n\n"
             f"  [dim]Artifact → {artifact_path}[/dim]\n\n"
-            f"  [bold]↵ Enter[/bold] — proceed    "
-            f"[bold]s[/bold] — skip checkpoint    "
-            f"[bold]a[/bold] — abort pipeline",
+            f"{controls}",
             title=f"[bold yellow]🔍 {checkpoint}[/bold yellow]",
             border_style="yellow",
         ))
@@ -477,10 +757,18 @@ class Pipeline:
         if response in ("a", "abort"):
             console.print("[red]⛔ Pipeline aborted by user at checkpoint.[/red]")
             raise SystemExit(0)
-        elif response in ("s", "skip"):
+        elif response in ("r", "rerun", "re-run") and loop_controls:
+            console.print("[yellow]  🔄 Forcing another loop iteration…[/yellow]\n")
+            return HumanDecision.FORCE_LOOP
+        elif response in ("f", "finish", "stop") and loop_controls:
+            console.print("[yellow]  ⏩ Stopping loop — continuing with current state…[/yellow]\n")
+            return HumanDecision.STOP_LOOP
+        elif response in ("s", "skip") and not loop_controls:
             console.print("[dim]  ↩ Checkpoint skipped.[/dim]\n")
+            return HumanDecision.CONTINUE
         else:
             console.print("[green]  ▶ Continuing pipeline…[/green]\n")
+            return HumanDecision.CONTINUE
 
     def _step_header(self, step: str, agent: str, description: str) -> None:
         console.print(Panel(
