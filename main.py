@@ -488,7 +488,10 @@ async def async_main(args: argparse.Namespace, requirements: str, spec, existing
         if not requirements and checkpoint.requirements:
             requirements = checkpoint.requirements
     else:
-        artifacts_dir = args.output_dir or os.path.join("artifacts", f"run_{timestamp}")
+        project_name_early = _resolve_project_name(args)
+        # Use <project-name>_run_<timestamp> so the artifact folder is traceable
+        run_folder = f"{project_name_early}_run_{timestamp}"
+        artifacts_dir = args.output_dir or os.path.join("artifacts", run_folder)
 
     human_checkpoints = not getattr(args, "auto", False)
     project_name = _resolve_project_name(args)
