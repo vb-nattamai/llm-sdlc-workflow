@@ -37,6 +37,7 @@ from rich.table import Table
 
 from llm_sdlc_workflow.agents import (
     ArchitectureAgent,
+    DeploymentAgent,
     DiscoveryAgent,
     EngineeringAgent,
     InfrastructureAgent,
@@ -47,6 +48,7 @@ from llm_sdlc_workflow.agents import (
 from llm_sdlc_workflow.config import PipelineConfig
 from llm_sdlc_workflow.models.artifacts import (
     ArchitectureArtifact,
+    DeploymentArtifact,
     DiscoveryArtifact,
     EngineeringArtifact,
     GeneratedSpecArtifact,
@@ -84,6 +86,7 @@ class PipelineResult:
     test_architecture: Optional[TestingArtifact] = None
     test_infrastructure: Optional[TestingArtifact] = None
     test_review: Optional[TestingArtifact] = None
+    deployment: Optional[DeploymentArtifact] = None
 
     errors: list = field(default_factory=list)
 
@@ -126,6 +129,7 @@ class Pipeline:
             artifacts_dir, generated_dir_name=project_name, config=self.config
         )
         self.infrastructure_agent = InfrastructureAgent(artifacts_dir, generated_dir_name=project_name)
+        self.deployment_agent = DeploymentAgent(artifacts_dir, generated_dir_name=project_name)
         self.review_agent = ReviewAgent(artifacts_dir)
         self.testing_agent = TestingAgent(artifacts_dir, generated_dir_name=project_name)
 
@@ -146,7 +150,7 @@ class Pipeline:
             "Discovery → Architecture → [Test] → Spec → "
             "[Engineering ‖ Infrastructure] → "
             "Review loop (max " + str(MAX_REVIEW_ITERATIONS) + ") → "
-            "[Live Test + Cypress] → [Final Test]\n\n"
+            "[Containers ‖ Deployment CI/CD] → [Live Test + Cypress] → [Final Test]\n\n"
             f"[dim]{self.config.summary()}[/dim]",
             title="Pipeline",
             style="bold blue",
@@ -318,12 +322,24 @@ class Pipeline:
                     ) if _crit else None,
                 )
 
-            # ── Step 7: Start containers + live testing ─────────────────────
-            self._step_header("Step 7", "Infrastructure Agent", "Building and starting containers")
-            result.infra_apply = await self.infrastructure_agent.run(
-                intent=result.intent,
-                architecture=result.architecture,
-                engineering=result.engineering,
+            # ── Step 7: Start containers + generate CI/CD package (parallel) ──
+            self._step_header(
+                "Step 7", "Infrastructure + Deployment Agent",
+                "Building containers and generating CI/CD + K8s/Helm package in parallel"
+            )
+            result.infra_apply, result.deployment = await asyncio.gather(
+                self.infrastructure_agent.run(
+                    intent=result.intent,
+                    architecture=result.architecture,
+                    engineering=result.engineering,
+                ),
+                self.deployment_agent.run(
+                    intent=result.intent,
+                    architecture=result.architecture,
+                    engineering=result.engineering,
+                    contract=result.generated_spec,
+                    iteration=result.engineering.review_iteration,
+                ),
             )
             if result.infra_apply.container_running:
                 self._step_done(
@@ -337,6 +353,11 @@ class Pipeline:
                     len(result.infra_apply.iac_files),
                     "IaC files written (container not running — live tests skipped)",
                 )
+            self._step_done(
+                "Deployment",
+                len(result.deployment.deployment_files),
+                f"CI/CD + K8s/Helm files ({result.deployment.deployment_strategy} strategy)",
+            )
 
             self._step_header(
                 "Step 7b", "Testing Agent",
@@ -521,6 +542,8 @@ class Pipeline:
                 "test_infrastructure_passed": result.test_infrastructure.passed if result.test_infrastructure else None,
                 "cypress_specs": len(result.test_infrastructure.cypress_spec_files) if result.test_infrastructure else 0,
                 "test_review_passed": result.test_review.passed if result.test_review else None,
+                "deployment_files": len(result.deployment.deployment_files) if result.deployment else 0,
+                "deployment_strategy": result.deployment.deployment_strategy if result.deployment else None,
             },
         }
         path = os.path.join(self.artifacts_dir, "00_pipeline_report.json")
@@ -575,6 +598,14 @@ class Pipeline:
                 f"score={rv.overall_score}/100, "
                 f"critical={len(rv.critical_issues)}, "
                 f"issues={len(rv.issues)}"
+            )
+        if result.deployment:
+            dep = result.deployment
+            table.add_row(
+                "Deployment (CI/CD + K8s + Helm)", "[green]DONE[/green]",
+                f"{len(dep.deployment_files)} files, "
+                f"strategy: {dep.deployment_strategy}, "
+                f"services: {', '.join(dep.services_deployed)}"
             )
         if result.test_infrastructure:
             tc = result.test_infrastructure

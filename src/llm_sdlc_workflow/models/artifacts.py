@@ -264,6 +264,40 @@ class InfrastructureArtifact(BaseModel):
     container_running: bool = False
 
 
+# ─── Deployment Agent ────────────────────────────────────────────────────────
+
+
+class DeploymentArtifact(BaseModel):
+    """Output of the Deployment Agent — CI/CD pipelines, K8s manifests, and Helm charts."""
+
+    deployment_files: List[IaCFile]              # all generated files (GitHub Actions, K8s, Helm)
+    deployment_strategy: str = "canary"          # "canary" | "blue-green" | "rolling"
+    ci_platform: str = "github-actions"
+    k8s_namespace: str = "production"
+    helm_chart_name: str = "app"
+    services_deployed: List[str] = []
+    canary_weight_steps: List[int] = []          # e.g. [10, 25, 50, 100]
+    blue_green_switch_command: str = ""          # shell command to flip traffic
+    environment_variables: Dict[str, str] = {}
+    secrets_required: List[str] = []
+    deployment_notes: List[str] = []
+    spec_compliance_notes: List[str] = []
+    decisions: List[DecisionRecord] = []
+    review_iteration: int = 1
+    review_feedback_applied: List[str] = []
+
+    @field_validator(
+        "services_deployed", "canary_weight_steps", "secrets_required",
+        "deployment_notes", "spec_compliance_notes", "review_feedback_applied",
+        mode="before",
+    )
+    @classmethod
+    def _coerce(cls, v: Any) -> list:
+        if not isinstance(v, list):
+            return [v] if v is not None else []
+        return v
+
+
 # ─── Review Agent ────────────────────────────────────────────────────────────
 
 

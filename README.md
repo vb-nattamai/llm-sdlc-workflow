@@ -42,31 +42,35 @@ Runs on **GitHub Models** via your **GitHub Copilot licence** — no separate AP
 │   Engineering Agent    │                    │  Infrastructure Agent  │
 │    (orchestrator)      │                    │  (IaC plan, parallel)  │
 │                        │                    └────────────────────────┘
-│  ┌──────────────────┐  │  Backend language/framework — configurable (default: Kotlin/Spring Boot 3.3)
+│  ┌──────────────────┐  │  Backend language/framework — configurable
 │  │  Backend Agent   │  │       → backend/
 │  └──────────────────┘  │
-│  ┌──────────────────┐  │  BFF — configurable (default: Kotlin/Spring WebFlux)  [optional]
+│  ┌──────────────────┐  │  BFF — configurable  [optional]
 │  │    BFF Agent     │  │       → bff/
 │  └──────────────────┘  │
-│  ┌──────────────────┐  │  Frontend — configurable (default: React 18 + TypeScript/Vite) [optional]
+│  ┌──────────────────┐  │  Frontend — configurable  [optional]
 │  │ Frontend Agent   │  │       → frontend/
 │  └──────────────────┘  │
 │  ┌──────────────────┐  │  Mobile — React Native / Flutter / Swift / Kotlin  [opt-in]
-│  │  Mobile Agent   │  │       → mobile/
+│  │  Mobile Agent    │  │       → mobile_<platform>/
 │  └──────────────────┘  │
 └────────┬───────────────┘        → 03_engineering_artifact.json
          │
          ▼
 ┌─────────────────────────────────────────────────┐
-│  Review Agent  (loop, up to 3 iterations)       │
-│  ↳ critical issues → re-gen Engineering + Infra │
-│    in parallel → repeat until passed            │
+│  Review Agent  (loop until no critical/high)    │
+│  ↳ critical or high issues → re-gen Engineering │
+│    + Infra in parallel → repeat until clean     │
 └────────┬────────────────────────────────────────┘
-         │         → 04_review_artifact.json
+         │         → 04_review_artifact_iter<N>.json
          ▼
-┌──────────────────────────┐
-│  Infrastructure Agent    │  Starts containers: docker compose up --build
-└────────┬─────────────────┘        → 06_infrastructure_artifact.json
+┌────────────────────────────────────┐
+│  Infrastructure Agent  ┐           │  Starts containers: docker compose up --build
+│  Deployment Agent      ┘ parallel  │  GitHub Actions + K8s + Helm + scripts
+└────────┬───────────────────────────┘
+         │  → 06b_infrastructure_apply_artifact.json
+         │  → 07_deployment_artifact.json + generated/deployment/
+         ▼
          │
          ▼
 ┌──────────────────────────┐
@@ -94,7 +98,8 @@ Runs on **GitHub Models** via your **GitHub Copilot licence** — no separate AP
 | ↳ **Frontend Agent** | React 18 + TypeScript 5 + Vite → Nginx, calls `bff:8080` — files under `frontend/` | `ServiceArtifact` |
 | ↳ **Mobile Agent** | React Native (Expo SDK 51) by default; supports Flutter, Swift, Kotlin — files under `mobile/`. Opt-in via `--mobile` or `components.mobile: true` | `ServiceArtifact` |
 | **Infrastructure Agent** | Dockerfiles + docker-compose for the full monorepo stack | `InfrastructureArtifact` |
-| **Review Agent** | Security (OWASP), reliability, code quality — feedback loop up to 3× | `ReviewArtifact` |
+| **Deployment Agent** | GitHub Actions CI/CD workflows, Kubernetes manifests, Helm chart, blue-green + canary strategies, rollback scripts | `DeploymentArtifact` |
+| **Review Agent** | Security (OWASP), reliability, code quality — feedback loop until no critical/high issues | `ReviewArtifact` |
 | **Testing Agent** | 3-stage: architecture plan → live HTTP + Cypress e2e → final sign-off | `TestingArtifact` |
 
 ---
@@ -115,7 +120,7 @@ Runs on **GitHub Models** via your **GitHub Copilot licence** — no separate AP
 | Testing (plan + live HTTP + Cypress e2e) | Testing Agent | ✅ Active |
 | API Documentation (Swagger UI, ADRs, runbooks) | Documentation Agent | 🔜 Planned |
 | Observability (Prometheus, OpenTelemetry, Grafana) | Observability Agent | 🔜 Planned |
-| CI/CD Pipelines (GitHub Actions, K8s, Helm) | Deployment Agent | 🔜 Planned |
+| CI/CD Pipelines (GitHub Actions, K8s, Helm, canary + blue-green) | Deployment Agent | ✅ Active |
 | Database Migrations (Flyway / Liquibase) | Migration Agent | 🔜 Planned |
 | Performance & Load Testing (k6 / Gatling) | Performance Agent | 🔜 Planned |
 | Compliance Checks (GDPR, SOC2, HIPAA) | Compliance Agent | 🔜 Planned |
@@ -1002,7 +1007,9 @@ artifacts/run_20260318_120000/
 ├── 05a_testing_architecture.json        # Testing: architecture stage
 ├── 05b_testing_infrastructure.json      # Testing: live HTTP + Cypress stage
 ├── 05c_testing_review.json              # Testing: final sign-off
-├── 06_infrastructure_artifact.json      # Infrastructure Agent output
+├── 06a_infrastructure_plan_artifact.json  # Infrastructure Agent — IaC plan
+├── 06b_infrastructure_apply_artifact.json # Infrastructure Agent — containers started
+├── 07_deployment_artifact.json           # Deployment Agent — CI/CD + K8s + Helm
 ├── *_agent_history.json                 # full LLM conversation history per agent
 └── generated/                           # ← all generated source code + IaC
     ├── backend/                         # Language/framework — configurable (default: Kotlin/Spring Boot)
@@ -1028,6 +1035,16 @@ artifacts/run_20260318_120000/
     ├── cypress/                         # Cypress e2e specs
     │   ├── cypress.config.ts
     │   └── e2e/*.cy.ts
+    ├── deployment/                      # CI/CD + Kubernetes + Helm
+    │   ├── .github/workflows/           # ci.yml, cd-staging.yml, cd-production-canary.yml
+    │   │   ├── ci.yml                   #   cd-production-blue-green.yml, security-scan.yml
+    │   │   └── ...                      #   rollback.yml
+    │   ├── k8s/                         # Base K8s manifests (Deployment, Service, Ingress, HPA, PDB)
+    │   │   ├── blue-green/              # Blue-green Deployment pairs + switch.sh
+    │   │   └── canary/                  # Argo Rollout CRD + AnalysisTemplate
+    │   ├── helm/                        # Helm chart (Chart.yaml, values per env, templates/)
+    │   ├── scripts/                     # deploy.sh, rollback.sh, canary-promote.sh
+    │   └── Makefile                     # make deploy-staging / deploy-production / rollback
     └── docker-compose.yml               # starts the full monorepo stack
 ```
 
@@ -1063,6 +1080,7 @@ llm-sdlc-workflow/                        ← repo root
 │       │   ├── frontend_agent.py        # accepts framework= / language= overrides
 │       │   ├── mobile_agent.py          # MobileAgent — React Native / Flutter / Swift / Kotlin
 │       │   ├── infrastructure_agent.py  # Dockerfiles + docker-compose
+│       │   ├── deployment_agent.py      # DeploymentAgent — GitHub Actions + K8s + Helm + canary/blue-green
 │       │   ├── review_agent.py          # OWASP security + code quality loop
 │       │   └── testing_agent.py         # 3-stage: arch → live HTTP → final
 │       │
@@ -1078,6 +1096,7 @@ llm-sdlc-workflow/                        ← repo root
 │           ├── frontend_agent.md        # default: React 18 + TypeScript 5 persona
 │           ├── mobile_agent.md          # React Native (Expo), Flutter, Swift, Kotlin variants
 │           ├── infrastructure_agent.md
+│           ├── deployment_agent.md      # GitHub Actions CI/CD, K8s, Helm, canary, blue-green
 │           ├── review_agent.md
 │           └── testing_agent.md
 │
@@ -1109,7 +1128,6 @@ The JSON schema at the bottom of each prompt file defines the artifact structure
 |---|---|---|
 | **DocumentationAgent** | Docs | API docs (Swagger UI config), Architecture Decision Records, runbooks, onboarding guides |
 | **ObservabilityAgent** | Ops | Prometheus metrics endpoints, structured logging config, OpenTelemetry tracing setup |
-| **DeploymentAgent** | CI/CD | GitHub Actions workflows, Kubernetes manifests, Helm charts, ArgoCD configs |
 | **MigrationAgent** | Database | Flyway / Liquibase migration scripts with rollback procedures |
 | **PerformanceAgent** | Testing | k6 / Gatling load test scripts, SLA budgets, bottleneck analysis |
 | **ComplianceAgent** | Governance | GDPR data map, SOC2 controls checklist, HIPAA PHI handling guide |
@@ -1124,7 +1142,7 @@ The JSON schema at the bottom of each prompt file defines the artifact structure
 
 2. **Contract-first spec** — the Spec Agent generates an OpenAPI + DDL contract *before* any code is written. All three engineering sub-agents implement against this single source of truth, ensuring consistency from day one.
 
-3. **Parallel sub-agents** — Only the *enabled* sub-agents run, via `asyncio.gather`. Disable BFF or Frontend with a flag; add Mobile with `--mobile`. Infrastructure planning also runs in parallel with Engineering.
+3. **Parallel sub-agents** — Only the *enabled* sub-agents run, via `asyncio.gather`. Disable BFF or Frontend with a flag; add Mobile with `--mobile`. Infrastructure planning also runs in parallel with Engineering. After the review loop, the **Infrastructure Agent** (start containers) and **Deployment Agent** (CI/CD + K8s + Helm) both run in parallel.
 
 4. **Review feedback loop** — the Review Agent runs up to 3 times. If critical issues are found, Engineering and Infrastructure both re-generate in parallel with the feedback applied.
 

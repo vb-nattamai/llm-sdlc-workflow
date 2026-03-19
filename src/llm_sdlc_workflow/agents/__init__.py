@@ -6,6 +6,7 @@ from .bff_agent import BffAgent
 from .frontend_agent import FrontendAgent
 from .mobile_agent import MobileAgent
 from .infrastructure_agent import InfrastructureAgent
+from .deployment_agent import DeploymentAgent
 from .review_agent import ReviewAgent
 from .testing_agent import TestingAgent
 from .spec_agent import SpecAgent
@@ -19,6 +20,7 @@ __all__ = [
     "FrontendAgent",
     "MobileAgent",
     "InfrastructureAgent",
+    "DeploymentAgent",
     "ReviewAgent",
     "TestingAgent",
     "SpecAgent",
