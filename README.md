@@ -17,70 +17,127 @@ Runs on **GitHub Models** via your **GitHub Copilot licence** — no separate AP
   Your Requirements
          │
          ▼
-┌──────────────────┐
-│ Discovery Agent  │  Analyses goals, constraints, success criteria, risks, scope
-└────────┬─────────┘        → 01_discovery_artifact.json
-         │
-         ▼
-┌─────────────────────┐  ◄── optional: --spec / --config (OpenAPI, SQL, tech/arch constraints)
-│ Architecture Agent  │  Designs components, data flow, API contracts, security model
-└────────┬────────────┘        → 02_architecture_artifact.json
-         │
-         ▼
-┌──────────────────────────┐
-│ Testing Agent [Stage 1]  │  Verifies architecture satisfies all stated requirements
-└────────┬─────────────────┘        → 05a_testing_architecture.json
-         │
-         ▼
-┌─────────────────────┐  ◄── optional: --from-run (extends existing contract)
-│    Spec Agent       │  Generates forward contract: OpenAPI 3.0 YAML + SQL DDL
-└────────┬────────────┘        → 04_generated_spec_artifact.json + generated/specs/
-         │
-         ├──────────────────────────────────────────────────┐
-         ▼                                                  ▼
-┌────────────────────────┐                    ┌────────────────────────┐
-│   Engineering Agent    │                    │  Infrastructure Agent  │
-│    (orchestrator)      │                    │  (IaC plan, parallel)  │
-│                        │                    └────────────────────────┘
-│  ┌──────────────────┐  │  Backend language/framework — configurable
-│  │  Backend Agent   │  │       → backend/
-│  └──────────────────┘  │
-│  ┌──────────────────┐  │  BFF — configurable  [optional]
-│  │    BFF Agent     │  │       → bff/
-│  └──────────────────┘  │
-│  ┌──────────────────┐  │  Frontend — configurable  [optional]
-│  │ Frontend Agent   │  │       → frontend/
-│  └──────────────────┘  │
-│  ┌──────────────────┐  │  Mobile — React Native / Flutter / Swift / Kotlin  [opt-in]
-│  │  Mobile Agent    │  │       → mobile_<platform>/
-│  └──────────────────┘  │
-└────────┬───────────────┘        → 03_engineering_artifact.json
-         │
-         ▼
-┌─────────────────────────────────────────────────┐
-│  Review Agent  (loop until no critical/high)    │
-│  ↳ critical or high issues → re-gen Engineering │
-│    + Infra in parallel → repeat until clean     │
-└────────┬────────────────────────────────────────┘
-         │         → 04_review_artifact_iter<N>.json
-         ▼
-┌────────────────────────────────────┐
-│  Infrastructure Agent  ┐           │  Starts containers: docker compose up --build
-│  Deployment Agent      ┘ parallel  │  GitHub Actions + K8s + Helm + scripts
-└────────┬───────────────────────────┘
-         │  → 06b_infrastructure_apply_artifact.json
-         │  → 07_deployment_artifact.json + generated/deployment/
-         ▼
-         │
-         ▼
-┌──────────────────────────┐
-│ Testing Agent [Stage 2]  │  Live HTTP tests + Cypress e2e spec generation
-└────────┬─────────────────┘        → 05b_testing_infrastructure.json + generated/cypress/
-         │
-         ▼
-┌──────────────────────────┐
-│ Testing Agent [Stage 3]  │  Final verification against original requirements
-└──────────────────────────┘        → 05c_testing_review.json
+┌──────────────────────┐
+│   Discovery Agent    │  Extracts requirements, goals, constraints, risks, scope
+└──────────┬───────────┘  → 01_discovery_artifact.json
+           │
+           ▼
+┌──────────────────────┐  ◄── optional: --spec / --config (OpenAPI, SQL, constraints)
+│  Architecture Agent  │  Designs components, data flow, API contracts, security model
+└──────────┬───────────┘  → 02_architecture_artifact.json
+           │
+           ▼
+  ┌─────────────────────────────────────────────────────────────┐
+  │           Testing Agent  [Stage 1 — Architecture]           │
+  │  Verifies architecture + spec satisfy all requirements      │
+  └─────────────────────────────────────────────────────────────┘
+           │  → 05a_testing_architecture.json
+           │
+           │  ✗ blocking issues found?
+           │  ╔═══════════════════════════════════════════════════════╗
+           │  ║  Architecture fix loop                                ║
+           │  ║  Testing finds gaps → Architecture Agent              ║
+           │  ║  redesigns affected components and re-runs Stage 1    ║
+           │  ║  until no blockers remain                             ║
+           │  ╚═══════════════════╤═════════════════════════════════╝ ║
+           │  ✓ all clear         │ (feedback applied, loop back)      ║
+           ▼                      └────────────────────────────────────╝
+           │
+           ▼
+┌──────────────────────┐  ◄── optional: --from-run (extends existing contract)
+│     Spec Agent       │  Generates forward contract: OpenAPI 3.0 YAML + SQL DDL
+└──────────┬───────────┘  → 04_generated_spec_artifact.json + generated/specs/
+           │
+           ├────────────────────────────────────────────┐
+           ▼                                            ▼
+┌────────────────────────────────┐     ┌───────────────────────────┐
+│      Engineering Agent         │     │   Infrastructure Agent    │
+│       (orchestrator)           │     │   (IaC plan — parallel)   │
+│                                │     └───────────────────────────┘
+│  ┌──────────────────────────┐  │
+│  │  Backend Agent           │  │  Language/framework — configurable
+│  └──────────────────────────┘  │  → backend/
+│  ┌──────────────────────────┐  │
+│  │  BFF Agent   [optional]  │  │  Configurable
+│  └──────────────────────────┘  │  → bff/
+│  ┌──────────────────────────┐  │
+│  │  Frontend Agent[optional]│  │  Configurable
+│  └──────────────────────────┘  │  → frontend/
+│  ┌──────────────────────────┐  │
+│  │  Mobile Agent  [opt-in]  │  │  React Native / Flutter / Swift / Kotlin
+│  └──────────────────────────┘  │  → mobile_<platform>/
+└───────────────┬────────────────┘  → 03_engineering_artifact.json
+                │
+                ▼
+  ╔═════════════════════════════════════════════════════════════════╗
+  ║                    Review Loop                                  ║
+  ║                                                                 ║
+  ║   ┌─────────────────────────────────────────────────────────┐  ║
+  ║   │                   Review Agent                           │  ║
+  ║   │   Security (OWASP) · Reliability · Code Quality · Perf  │  ║
+  ║   │          → 04_review_artifact_iter<N>.json              │  ║
+  ║   └────────────────────────┬────────────────────────────────┘  ║
+  ║                            │                                    ║
+  ║             ┌──────────────┴────────────────┐                  ║
+  ║             ▼                               ▼                  ║
+  ║   ✓ passed                      ✗ critical or high issues      ║
+  ║   (no critical/high)                        │                  ║
+  ║             │                               ▼                  ║
+  ║             │              ┌────────────────────────────────┐  ║
+  ║             │              │  Engineering Agent  (re-gen)   │  ║
+  ║             │              │  + Infrastructure Agent (plan) │  ║
+  ║             │              │    both run in parallel        │  ║
+  ║             │              └───────────────┬────────────────┘  ║
+  ║             │                              │ feedback applied   ║
+  ║             │                              └──► Review Agent    ║
+  ║             │                                  (next iteration) ║
+  ╚═════════════╪═════════════════════════════════════════════════╝ ║
+                │  ✓ review clean (no critical/high issues left)    ║
+                ▼                                                   ║
+  ┌─────────────────────────────────────────────────────────────┐  ║
+  │   Infrastructure Agent  ┐                                   │  ║
+  │   Deployment Agent      ┘   parallel                        │  ║
+  │                                                             │  ║
+  │  • Infrastructure: docker compose up --build                │  ║
+  │  • Deployment: GitHub Actions CI/CD + K8s manifests + Helm  │  ║
+  │                canary (10 → 25 → 50 → 100 %)               │  ║
+  │                blue-green (atomic kubectl patch switch)     │  ║
+  └──────────────────────────┬──────────────────────────────────┘  ║
+    → 06b_infrastructure_apply_artifact.json                        ║
+    → 07_deployment_artifact.json + generated/deployment/           ║
+                             │                                      ║
+                             ▼                                      ║
+  ╔═════════════════════════════════════════════════════════════════╣
+  ║            Testing Loop  [Stage 2 — Infrastructure]            ║
+  ║                                                                 ║
+  ║   ┌─────────────────────────────────────────────────────────┐  ║
+  ║   │                   Testing Agent                          │  ║
+  ║   │     Live HTTP tests + Cypress e2e spec generation        │  ║
+  ║   │           → 05b_testing_infrastructure.json             │  ║
+  ║   └────────────────────────┬────────────────────────────────┘  ║
+  ║                            │                                    ║
+  ║             ┌──────────────┴────────────────┐                  ║
+  ║             ▼                               ▼                  ║
+  ║   ✓ all services pass           ✗ services failing             ║
+  ║             │                               │                  ║
+  ║             │                               ▼                  ║
+  ║             │              ┌────────────────────────────────┐  ║
+  ║             │              │  Engineering Agent             │  ║
+  ║             │              │  (re-gen failed services only) │  ║
+  ║             │              │  + Infrastructure Agent        │  ║
+  ║             │              │  (restart containers)          │  ║
+  ║             │              └───────────────┬────────────────┘  ║
+  ║             │                              │ retry (up to 2×)  ║
+  ║             │                              └──► Testing Stage 2 ║
+  ╚═════════════╪═════════════════════════════════════════════════╝
+                │  ✓ live tests pass
+                │    + generated/cypress/ Cypress e2e specs written
+                ▼
+  ┌─────────────────────────────────────────────────────────────┐
+  │         Testing Agent  [Stage 3 — Final Sign-off]           │
+  │   Final verification against original requirements          │
+  └─────────────────────────────────────────────────────────────┘
+                   → 05c_testing_review.json
 ```
 
 ---
