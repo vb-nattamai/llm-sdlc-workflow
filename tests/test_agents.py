@@ -128,16 +128,18 @@ class TestDiscoveryAgentRun:
 
     async def test_retries_on_transient_error_then_succeeds(self, tmp_path):
         agent = DiscoveryAgent(artifacts_dir=str(tmp_path))
+        # Two-phase: phase1 fails once then succeeds, phase2 succeeds on first try
         mock = AsyncMock(
             side_effect=[
                 RuntimeError("transient rate limit"),
                 _discovery_llm_response(),
+                _discovery_llm_response(),  # phase 2 call
             ]
         )
         with patch.object(agent, "_raw_query", new=mock), patch("asyncio.sleep", new=AsyncMock()):
             result = await agent.run("Build a task management API")
         assert isinstance(result, DiscoveryArtifact)
-        assert mock.call_count == 2
+        assert mock.call_count == 3  # 2 for phase1 (1 retry) + 1 for phase2
 
     async def test_raises_after_max_retries_exhausted(self, tmp_path):
         agent = DiscoveryAgent(artifacts_dir=str(tmp_path))
@@ -183,8 +185,8 @@ class TestDiscoveryAgentRun:
         mock = AsyncMock(return_value=_discovery_llm_response())
         with patch.object(agent, "_raw_query", new=mock):
             await agent.run("unique-requirement-string-abc")
-        # Check the user message passed to _raw_query
-        user_msg = mock.call_args[0][1]  # second positional arg is user_message
+        # Requirements appear in Phase 1 (first call); call_args only has the last call
+        user_msg = mock.call_args_list[0][0][1]  # phase 1 user_message
         assert "unique-requirement-string-abc" in user_msg
 
 
@@ -247,7 +249,8 @@ class TestArchitectureAgentRun:
         mock = AsyncMock(return_value=_architecture_llm_response())
         with patch.object(agent, "_raw_query", new=mock):
             await agent.run(_make_intent(), spec=spec)
-        user_message = mock.call_args[0][1]
+        # Spec constraints are injected in Phase 1 (first call)
+        user_message = mock.call_args_list[0][0][1]
         assert "microservices" in user_message
         assert "Kotlin" in user_message
 
@@ -257,7 +260,8 @@ class TestArchitectureAgentRun:
         mock = AsyncMock(return_value=_architecture_llm_response())
         with patch.object(agent, "_raw_query", new=mock):
             await agent.run(_make_intent(), spec=spec)
-        user_message = mock.call_args[0][1]
+        # API spec is injected in Phase 1 (first call)
+        user_message = mock.call_args_list[0][0][1]
         assert "openapi" in user_message.lower()
 
     async def test_intent_compact_appears_in_user_message(self, tmp_path):
@@ -266,19 +270,21 @@ class TestArchitectureAgentRun:
         mock = AsyncMock(return_value=_architecture_llm_response())
         with patch.object(agent, "_raw_query", new=mock):
             await agent.run(_make_intent())
-        user_message = mock.call_args[0][1]
+        # Intent compact is included in Phase 1 (first call)
+        user_message = mock.call_args_list[0][0][1]
         # The compact output contains the DiscoveryArtifact class name
         assert "DiscoveryArtifact" in user_message
 
     async def test_retries_on_transient_error(self, tmp_path):
         agent = ArchitectureAgent(artifacts_dir=str(tmp_path))
+        # Two-phase: phase1 fails then succeeds, phase2 succeeds on first try
         mock = AsyncMock(
-            side_effect=[RuntimeError("timeout"), _architecture_llm_response()]
+            side_effect=[RuntimeError("timeout"), _architecture_llm_response(), _architecture_llm_response()]
         )
         with patch.object(agent, "_raw_query", new=mock), patch("asyncio.sleep", new=AsyncMock()):
             result = await agent.run(_make_intent())
         assert isinstance(result, ArchitectureArtifact)
-        assert mock.call_count == 2
+        assert mock.call_count == 3  # 2 for phase1 (1 retry) + 1 for phase2
 
     async def test_raises_value_error_on_empty_response(self, tmp_path):
         agent = ArchitectureAgent(artifacts_dir=str(tmp_path))
