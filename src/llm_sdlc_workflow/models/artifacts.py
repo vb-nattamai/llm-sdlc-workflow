@@ -563,6 +563,9 @@ class GeneratedSpecArtifact(BaseModel):
     # Short human-readable summary for the usage guide
     usage_guide: str = ""
 
+    # Decisions made while writing this spec contract
+    decisions: List[DecisionRecord] = []
+
     @model_validator(mode="before")
     @classmethod
     def _coerce_str_fields(cls, v: Any) -> Any:

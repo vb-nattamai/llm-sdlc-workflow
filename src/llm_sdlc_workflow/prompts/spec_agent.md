@@ -83,5 +83,8 @@ Respond with a single JSON object matching this schema exactly:
     {"path": "specs/pipeline.yaml",        "purpose": "Ready-to-use --from-run config","content": "__PENDING__"},
     {"path": "specs/SPEC_DRIVEN_DEV.md",   "purpose": "Developer usage guide",         "content": "__PENDING__"}
   ],
-  "usage_guide": "one-paragraph summary of how to use these specs"
+  "usage_guide": "one-paragraph summary of how to use these specs",
+  "decisions": [
+    {"decision": "<what was decided>", "rationale": "<why>", "alternatives_considered": ["<alt1>", "<alt2>"], "trade_offs": ["<tradeoff>"]}
+  ]
 }
