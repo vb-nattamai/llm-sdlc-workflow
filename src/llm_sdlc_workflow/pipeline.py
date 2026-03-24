@@ -156,6 +156,7 @@ class PipelineResult:
     deployment: Optional[DeploymentArtifact] = None
 
     errors: list = field(default_factory=list)
+    pipeline_events: list = field(default_factory=list)  # retry / self-heal / parse-error trace
 
     @property
     def review(self) -> Optional[ReviewArtifact]:
@@ -1038,6 +1039,32 @@ class Pipeline:
             console.print(f"[dim]   … {remaining} more → {log_path}[/dim]")
         console.print()
 
+    def _drain_agent_events(self, result: "PipelineResult") -> None:
+        """Collect events emitted by all agent instances into result.pipeline_events.
+
+        Called just before writing DECISIONS_LOG so every retry, self-heal attempt,
+        and parse error is captured regardless of which stage emitted it.
+        """
+        top_level = [
+            self.discovery_agent, self.architecture_agent, self.spec_agent,
+            self.review_agent, self.testing_agent, self.infrastructure_agent,
+            self.deployment_agent,
+        ]
+        # Engineering sub-agents live one level deeper
+        sub_agents = []
+        if hasattr(self, "engineering_agent") and self.engineering_agent:
+            eng = self.engineering_agent
+            top_level.append(eng)
+            for attr in ("backend_agent", "bff_agent", "frontend_agent"):
+                sa = getattr(eng, attr, None)
+                if sa:
+                    sub_agents.append(sa)
+
+        for ag in top_level + sub_agents:
+            if ag and hasattr(ag, "events"):
+                result.pipeline_events.extend(ag.events)
+                ag.events.clear()
+
     def _write_decision_log(self, result: "PipelineResult") -> None:
         """Write DECISIONS_LOG.md — a human-readable log of every agent decision.
 
@@ -1046,7 +1073,12 @@ class Pipeline:
         - Why it was decided (the rationale)
         - What alternatives were considered and rejected
         - Trade-offs that were accepted
+
+        Also writes a Pipeline Events section capturing every retry,
+        self-heal attempt, and validation error for full traceability.
         """
+        # Always drain events first so mid-run writes are complete
+        self._drain_agent_events(result)
         def _decs(obj, field: str) -> list:
             if obj is None:
                 return []
@@ -1123,6 +1155,29 @@ class Pipeline:
             ]
 
         path = os.path.join(self.artifacts_dir, "DECISIONS_LOG.md")
+
+        # ── Pipeline Events section ──────────────────────────────────────────
+        events = result.pipeline_events or []
+        if events:
+            lines += [
+                "## Pipeline Events",
+                "*Retries, self-heals, and parse errors recorded during this run.*",
+                "",
+                "| Time | Agent | Type | Message |",
+                "|------|-------|------|---------|" ,
+            ]
+            for ev in events:
+                ts = str(ev.get("timestamp", ""))[:19].replace("T", " ")
+                ag = ev.get("agent", "")
+                et = ev.get("event_type", "")
+                msg = ev.get("message", "")
+                detail = ev.get("detail", "")
+                row = f"| {ts} | {ag} | {et} | {msg} |"
+                lines.append(row)
+                if detail:
+                    lines.append(f"| | | | _{detail[:120]}_ |")
+            lines += ["", "---", ""]
+
         with open(path, "w") as f:
             f.write("\n".join(lines))
         console.print(f"[dim]📋 Decision log saved → {path}  ({total} decisions across {sum(1 for _, _, d in stages if d)} stages)[/dim]")

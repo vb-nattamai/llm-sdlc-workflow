@@ -53,6 +53,20 @@ def _coerce_env_vars(v: Any) -> Dict[str, str]:
     return result
 
 
+class PipelineEvent(BaseModel):
+    """A single observable event emitted by an agent during the pipeline run.
+
+    Recorded for every retry, self-heal attempt, coercion fallback, or
+    validation error so the full run is reproducible and auditable.
+    """
+
+    timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
+    event_type: str   # retry | self_heal | parse_error | coerce | info | warning
+    agent: str
+    message: str
+    detail: str = ""
+
+
 class DecisionRecord(BaseModel):
     """Captures a single architectural or implementation decision with full rationale."""
 
@@ -212,6 +226,11 @@ class ComponentSpec(BaseModel):
     def _coerce_str_fields(cls, v: Any) -> Any:
         return _coerce_all_str_fields(cls, v)
 
+    @field_validator("interfaces", "dependencies", mode="before")
+    @classmethod
+    def _coerce(cls, v: Any) -> List[str]:
+        return _coerce_str_list(v)
+
 
 class ArchitectureArtifact(BaseModel):
     """Output of the Architecture Agent — the system design blueprint."""
@@ -259,6 +278,11 @@ class ReviewFeedback(BaseModel):
     suggestions: List[str] = []          # nice-to-have
     passed: bool = False                 # True only when no critical issues remain
 
+    @field_validator("critical_issues", "high_issues", "suggestions", mode="before")
+    @classmethod
+    def _coerce_feedback(cls, v: Any) -> List[str]:
+        return _coerce_str_list(v)
+
 
 class TechStack(BaseModel):
     framework: str
@@ -267,11 +291,26 @@ class TechStack(BaseModel):
     key_libraries: List[str]
     rationale: str
 
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_str_fields(cls, v: Any) -> Any:
+        return _coerce_all_str_fields(cls, v)
+
+    @field_validator("key_libraries", mode="before")
+    @classmethod
+    def _coerce(cls, v: Any) -> List[str]:
+        return _coerce_str_list(v)
+
 
 class FileSpec(BaseModel):
     path: str
     purpose: str
     content: str  # full file content or detailed implementation spec
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_str_fields(cls, v: Any) -> Any:
+        return _coerce_all_str_fields(cls, v)
 
 
 class ImplementationStep(BaseModel):
@@ -279,6 +318,16 @@ class ImplementationStep(BaseModel):
     description: str
     files_involved: List[str]
     acceptance_criteria: List[str] = []
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_str_fields(cls, v: Any) -> Any:
+        return _coerce_all_str_fields(cls, v)
+
+    @field_validator("files_involved", "acceptance_criteria", mode="before")
+    @classmethod
+    def _coerce(cls, v: Any) -> List[str]:
+        return _coerce_str_list(v)
 
 
 class EngineeringArtifact(BaseModel):
@@ -368,6 +417,11 @@ class IaCFile(BaseModel):
     content: str    # full file content
     purpose: str    # one-line description
 
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_str_fields(cls, v: Any) -> Any:
+        return _coerce_all_str_fields(cls, v)
+
 
 class InfrastructureArtifact(BaseModel):
     """Output of the Infrastructure Agent — IaC files and container runtime info."""
@@ -432,16 +486,31 @@ class DeploymentArtifact(BaseModel):
     review_iteration: int = 1
     review_feedback_applied: List[str] = []
 
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_str_fields(cls, v: Any) -> Any:
+        return _coerce_all_str_fields(cls, v)
+
     @field_validator(
-        "services_deployed", "canary_weight_steps", "secrets_required",
+        "services_deployed", "secrets_required",
         "deployment_notes", "spec_compliance_notes", "review_feedback_applied",
         mode="before",
     )
     @classmethod
-    def _coerce(cls, v: Any) -> list:
+    def _coerce(cls, v: Any) -> List[str]:
+        return _coerce_str_list(v)
+
+    @field_validator("canary_weight_steps", mode="before")
+    @classmethod
+    def _coerce_int_list(cls, v: Any) -> List[int]:
         if not isinstance(v, list):
-            return [v] if v is not None else []
-        return v
+            return []
+        return [int(x) for x in v if x is not None]
+
+    @field_validator("environment_variables", mode="before")
+    @classmethod
+    def _coerce_env(cls, v: Any) -> Dict[str, str]:
+        return _coerce_env_vars(v)
 
 
 # ─── Review Agent ────────────────────────────────────────────────────────────
@@ -454,6 +523,11 @@ class Issue(BaseModel):
     location: str
     recommendation: str
     cwe_id: Optional[str] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_str_fields(cls, v: Any) -> Any:
+        return _coerce_all_str_fields(cls, v)
 
 
 class ReviewArtifact(ReviewFeedback):
@@ -476,11 +550,6 @@ class ReviewArtifact(ReviewFeedback):
     )
     @classmethod
     def _coerce(cls, v: Any) -> List[str]:
-        return _coerce_str_list(v)
-
-    @field_validator("critical_issues", "high_issues", "suggestions", mode="before")
-    @classmethod
-    def _coerce_feedback(cls, v: Any) -> List[str]:
         return _coerce_str_list(v)
 
 
@@ -506,6 +575,16 @@ class HttpTestCase(BaseModel):
     actual_response: Optional[str] = None
     error: Optional[str] = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_str_fields(cls, v: Any) -> Any:
+        return _coerce_all_str_fields(cls, v)
+
+    @field_validator("response_contains", mode="before")
+    @classmethod
+    def _coerce(cls, v: Any) -> List[str]:
+        return _coerce_str_list(v)
+
 
 class TestCase(BaseModel):
     id: str
@@ -517,6 +596,16 @@ class TestCase(BaseModel):
     expected_outcome: str
     actual_outcome: Optional[str] = None
     status: Optional[str] = None   # passed | failed | skipped | pending
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_str_fields(cls, v: Any) -> Any:
+        return _coerce_all_str_fields(cls, v)
+
+    @field_validator("steps", mode="before")
+    @classmethod
+    def _coerce(cls, v: Any) -> List[str]:
+        return _coerce_str_list(v)
 
 
 class TestingArtifact(BaseModel):
@@ -592,4 +681,9 @@ class GeneratedSpecArtifact(BaseModel):
     @classmethod
     def _coerce_str_fields(cls, v: Any) -> Any:
         return _coerce_all_str_fields(cls, v)
+
+    @field_validator("monorepo_services", "shared_models", mode="before")
+    @classmethod
+    def _coerce(cls, v: Any) -> List[str]:
+        return _coerce_str_list(v)
 

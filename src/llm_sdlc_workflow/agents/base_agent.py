@@ -206,6 +206,20 @@ class BaseAgent:
         self.generated_dir_name = generated_dir_name
         os.makedirs(artifacts_dir, exist_ok=True)
         self.history: List[Dict[str, Any]] = []
+        self.events: List[Dict[str, Any]] = []   # pipeline-level event log
+
+    def _emit_event(self, event_type: str, message: str, detail: str = "") -> None:
+        """Record an observable event (retry, self-heal, parse-error, coerce) for the decision log."""
+        import time as _time
+        from datetime import datetime as _dt
+        entry = {
+            "timestamp": _dt.now().isoformat(),
+            "event_type": event_type,
+            "agent": self.name,
+            "message": message,
+            "detail": detail,
+        }
+        self.events.append(entry)
 
     # ─── LLM ────────────────────────────────────────────────────────────────
 
@@ -215,7 +229,11 @@ class BaseAgent:
         user_message: str,
         model_class: Type[T],
     ) -> T:
-        """Single-shot structured query → parsed Pydantic model."""
+        """Single-shot structured query → parsed Pydantic model.
+
+        On JSON/validation failure, makes one self-heal attempt: sends the raw
+        response + error back to the LLM and asks it to return corrected JSON.
+        """
         console.print(Rule(f"[bold cyan]{self.name}[/bold cyan]"))
         self._add_to_history("user", f"{system}\n\n---\n\n{user_message}")
         raw = await self._run_with_retry(system, user_message)
@@ -227,9 +245,63 @@ class BaseAgent:
             data = self._extract_json(raw)
             return model_class(**data)
         except Exception as e:
+            self._emit_event(
+                "parse_error",
+                f"JSON/validation error — attempting self-heal",
+                detail=str(e)[:300],
+            )
             console.print(f"[red]JSON parse error in {self.name}:[/red] {e}")
-            console.print(f"[dim]Raw (first 1000 chars):\n{raw[:1000]}[/dim]")
-            raise
+            console.print(f"[dim]Raw (first 800 chars):\n{raw[:800]}[/dim]")
+            return await self._self_heal(system, raw, e, model_class)
+
+    async def _self_heal(
+        self,
+        system: str,
+        raw: str,
+        original_error: Exception,
+        model_class: Type[T],
+    ) -> T:
+        """Ask the LLM to fix its own malformed JSON response (one attempt).
+
+        Sends the original response + the validation error back, requesting a
+        corrected JSON object.  Emits a ``self_heal`` event whether it succeeds
+        or not so the decision log always has a full trace.
+        """
+        heal_prompt = (
+            f"Your previous response caused a validation error:\n"
+            f"```\n{original_error}\n```\n\n"
+            f"Here is the original response (first 3000 chars):\n"
+            f"```\n{raw[:3000]}\n```\n\n"
+            "Please return ONLY a corrected, valid JSON object.\n"
+            "Rules:\n"
+            "  1. Every list field must contain plain strings, not objects or dicts.\n"
+            "  2. Every required field must be present.\n"
+            "  3. No extra keys; no markdown fences; raw JSON only."
+        )
+        console.print(f"[yellow]🔧 {self.name} — self-healing malformed response…[/yellow]")
+        try:
+            healed_raw = await self._run_with_retry(system, heal_prompt)
+            self._add_to_history("user", heal_prompt)
+            self._add_to_history("assistant", healed_raw or "")
+            if not healed_raw:
+                raise ValueError("Self-heal returned empty response.")
+            data = self._extract_json(healed_raw)
+            result = model_class(**data)
+            self._emit_event(
+                "self_heal",
+                "Self-heal succeeded — corrected JSON accepted",
+                detail=f"original error: {str(original_error)[:200]}",
+            )
+            console.print(f"[green]✅ {self.name} — self-heal succeeded.[/green]")
+            return result
+        except Exception as heal_err:
+            self._emit_event(
+                "self_heal",
+                "Self-heal FAILED — raising original error",
+                detail=f"heal error: {str(heal_err)[:200]} | original: {str(original_error)[:200]}",
+            )
+            console.print(f"[red]{self.name} — self-heal also failed: {heal_err}[/red]")
+            raise original_error  # raise the first error so the caller sees the root cause
 
     async def _two_phase_parse(
         self,
@@ -261,7 +333,14 @@ class BaseAgent:
         console.print(Rule())
         if not raw1:
             raise ValueError(f"{self.name} ({phase1_label}) returned empty response.")
-        data = self._extract_json(raw1)
+        try:
+            data = self._extract_json(raw1)
+        except Exception as e:
+            # Self-heal phase 1 — it carries the main artifact body so failure is fatal
+            self._emit_event("parse_error", f"Phase 1 parse error — attempting self-heal", detail=str(e)[:300])
+            console.print(f"[red]Phase 1 parse error in {self.name}:[/red] {e}")
+            healed = await self._self_heal(system, raw1, e, model_class)
+            return healed
         data.setdefault(merge_key, [])
 
         # ── Phase 2 ──────────────────────────────────────────────────────────
@@ -508,6 +587,11 @@ class BaseAgent:
             except Exception as e:
                 last_err = e
                 if attempt < MAX_RETRIES:
+                    self._emit_event(
+                        "retry",
+                        f"Attempt {attempt}/{MAX_RETRIES} failed — retrying in {RETRY_DELAY}s",
+                        detail=str(e)[:200],
+                    )
                     console.print(
                         f"[yellow][{self.name}] Attempt {attempt} failed: {e}. "
                         f"Retrying in {RETRY_DELAY}s…[/yellow]"
