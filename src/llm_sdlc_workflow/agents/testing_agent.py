@@ -1,4 +1,4 @@
-"""
+"""    
 Testing Agent — verifies the application at each pipeline stage.
 
 IMPORTANT: The Testing Agent ONLY uses DiscoveryArtifact to derive test cases.
@@ -7,8 +7,10 @@ Architecture and Engineering; testing must validate against user intent only.
 
 Runs at three stages:
   architecture  — does the design satisfy requirements?
-  infrastructure — live HTTP tests + Cypress e2e spec generation + optional run
+  infrastructure — live HTTP tests via httpx (curl-equivalent) for every endpoint
   review        — final check after review/fix iterations
+
+No Cypress / browser testing is generated — all live checks use plain HTTP calls.
 """
 
 from __future__ import annotations
@@ -73,8 +75,8 @@ class TestingAgent(BaseAgent):
                 f"The application is LIVE and running at {base_url}. "
                 "Generate http_test_cases with real, executable HTTP requests for every "
                 "functional requirement from the Discovery. "
-                "Also generate cypress_spec_files (TypeScript .cy.ts) covering every user journey. "
-                "cypress_spec_files baseUrl should match: " + base_url
+                "Set cypress_spec_files to []. "
+                "Tests will be executed via curl/httpx — no browser required."
             )
         else:
             stage_instruction = {
@@ -96,7 +98,8 @@ class TestingAgent(BaseAgent):
 {context}
 
 Produce the complete TestingArtifact including:
-  - stage, test_cases, http_test_cases (if infrastructure stage), cypress_spec_files (if needed)
+  - stage, test_cases, http_test_cases (infrastructure stage: one entry per endpoint)
+  - cypress_spec_files: [] (always empty — live tests use httpx/curl, not Cypress)
   - coverage_areas, uncovered_areas
   - blocking_issues: list of requirements NOT satisfied
   - findings, recommendations
@@ -108,12 +111,10 @@ Respond ONLY with the JSON object."""
 
         artifact = await self._query_and_parse(SYSTEM_PROMPT, message, TestingArtifact)
 
-        # Infrastructure stage: execute live HTTP tests + write/run Cypress specs
+        # Infrastructure stage: execute live HTTP tests via httpx (curl-equivalent)
         if stage == "infrastructure":
             if infrastructure and infrastructure.container_running and infrastructure.base_url:
                 await self._run_live_tests(artifact, infrastructure.base_url)
-            self._write_cypress_specs(artifact)
-            await self._run_cypress(artifact)
 
         filename = {
             "architecture": "05a_testing_architecture.json",

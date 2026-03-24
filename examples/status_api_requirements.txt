@@ -1,0 +1,15 @@
+Build a minimal single-endpoint status API.
+
+Requirements:
+1. GET /status → returns JSON: { "status": "ok", "service": "status-api", "timestamp": "<ISO 8601 datetime>" }
+2. GET /actuator/health → Spring Boot Actuator health endpoint
+
+Technology:
+- Kotlin with Spring Boot 3.3, Gradle Kotlin DSL
+- No database, no authentication, no BFF, no frontend
+- Stateless service
+
+Non-functional:
+- Backend only, single service on port 8080
+- Multi-stage Dockerfile (builder + runtime image)
+- docker compose up starts it with one command

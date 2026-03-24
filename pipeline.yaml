@@ -21,8 +21,8 @@
 # Overridden by --no-bff, --no-frontend, --mobile on the CLI.
 components:
   backend: true        # Always recommended. Set false to... why would you?
-  bff: true            # Backend-for-Frontend proxy layer. Set false for API-only projects.
-  frontend: true       # Web frontend. Set false for API-only or mobile-only projects.
+  bff: false           # Backend-for-Frontend proxy layer. Set true if you need a BFF tier.
+  frontend: false      # Web frontend. Set true if you need a web UI.
 
   # mobile_platforms: list of platforms to generate in parallel.
   # Each entry spawns an independent MobileAgent. Leave empty (or omit) to disable.
@@ -49,9 +49,9 @@ components:
 #   mobile_platform: "iOS (Swift)"
 #   mobile_platform: "Android (Kotlin)"
 tech:
-  # Backend (default: Kotlin / Spring Boot 3)
-  backend_language: null      # e.g. "Python", "Go", "Node.js", "Java"
-  backend_framework: null     # e.g. "FastAPI", "Gin", "Express", "Spring Boot"
+  # Backend (default: Python / FastAPI)
+  backend_language: "Python"     # e.g. "Kotlin", "Go", "Node.js", "Java"
+  backend_framework: "FastAPI"   # e.g. "Spring Boot", "Gin", "Express"
 
   # BFF — Backend for Frontend (default: Kotlin / Spring WebFlux)
   bff_language: null          # e.g. "Node.js", "Kotlin"

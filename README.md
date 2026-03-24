@@ -146,8 +146,8 @@ Runs on **GitHub Models** via your **GitHub Copilot licence** — no separate AP
 
 | Agent | Role | Output |
 |---|---|---|
-| **Discovery Agent** | Extracts requirements, goals, constraints, scope, risks, and success criteria from raw text | `DiscoveryArtifact` |
-| **Architecture Agent** | Designs the system: components, data flow, API contracts, security model | `ArchitectureArtifact` |
+| **Discovery Agent** | Extracts requirements, goals, constraints, scope, risks, and success criteria from raw text. Uses two-phase LLM calls: phase 1 = facts & scope; phase 2 = interpretation decisions | `DiscoveryArtifact` |
+| **Architecture Agent** | Designs the system: components, data flow, API contracts, security model. Uses two-phase LLM calls: phase 1 = structure; phase 2 = design decisions | `ArchitectureArtifact` |
 | **Spec Agent** | Generates the **forward contract** (OpenAPI 3.0 + SQL DDL) that all engineering implements against | `GeneratedSpecArtifact` |
 | **Engineering Agent** | Orchestrates BE + BFF + FE sub-agents in parallel via `asyncio.gather` | `EngineeringArtifact` |
 | ↳ **Backend Agent** | Kotlin 1.9 + Spring Boot 3.3 + Gradle + JPA + JWT — files under `backend/` | `ServiceArtifact` |
@@ -156,7 +156,7 @@ Runs on **GitHub Models** via your **GitHub Copilot licence** — no separate AP
 | ↳ **Mobile Agent** | React Native (Expo SDK 51) by default; supports Flutter, Swift, Kotlin — files under `mobile/`. Opt-in via `--mobile` or `components.mobile: true` | `ServiceArtifact` |
 | **Infrastructure Agent** | Dockerfiles + docker-compose for the full monorepo stack | `InfrastructureArtifact` |
 | **Deployment Agent** | GitHub Actions CI/CD workflows, Kubernetes manifests, Helm chart, blue-green + canary strategies, rollback scripts | `DeploymentArtifact` |
-| **Review Agent** | Security (OWASP), reliability, code quality — feedback loop until no critical/high issues. Score is computed via a deterministic rubric (start 100, deduct 15/8/3/1 per critical/high/medium/low issue per dimension, weighted average) — never a guess | `ReviewArtifact` |
+| **Review Agent** | Security (OWASP), reliability, code quality — feedback loop until no critical/high issues. Score computed by deterministic rubric: start 100, deduct 15/8/3/1 per critical/high/medium/low per dimension, weighted avg | `ReviewArtifact` |
 | **Testing Agent** | 3-stage: architecture plan → live HTTP + Cypress e2e → final sign-off | `TestingArtifact` |
 
 ---
@@ -523,6 +523,52 @@ python3.11 main.py \
 ```
 
 > **Tip:** Commit each run's `generated/specs/` directory to git. Your API contract history becomes part of your codebase, with full `git diff` between sprints.
+
+---
+
+## Resilience & Reliability
+
+The pipeline is designed to tolerate LLM non-determinism without crashing.
+
+### Self-healing responses
+
+Every agent call goes through `_query_and_parse`. When the LLM returns malformed JSON or an object that fails Pydantic validation, the pipeline **does not abort** — it performs one self-heal attempt:
+
+1. The raw broken response + the exact error message are sent back to the LLM.
+2. The LLM is instructed to return corrected JSON with explicit rules (no dicts in list fields, all required fields present, no markdown fences).
+3. If the corrected response also fails, the original error is raised and captured in the event log — nothing is silently swallowed.
+
+### LLM call retry
+
+Every LLM call retries up to 3 times (with exponential back-off) on transient errors (rate limits, network timeouts, server errors). Each retry is logged as a `retry` event.
+
+### Coercion layer
+
+All Pydantic models have field-level coercion validators so that common LLM schema deviations never reach validation:
+
+| LLM deviation | Coercion applied |
+|---|---|
+| `List[str]` field contains `{"description": "..."}` objects | Extracts string value from dict |
+| `str` field returned as `{"in_scope": [...], "out_of_scope": [...]}` | Flattened to readable string |
+| `Dict[str, str]` env-vars returned as `{"value": "...", "purpose": "..."}` objects | Flattened to plain string |
+| `List[int]` returned with string entries | Cast to `int` |
+| Missing optional list field | Defaults to `[]` |
+
+### Full traceability
+
+Every retry, self-heal attempt, and parse error is recorded as a `PipelineEvent` (timestamp, agent, type, message, detail) and written to the **Pipeline Events** table at the bottom of `DECISIONS_LOG.md`:
+
+```markdown
+## Pipeline Events
+
+| Time                | Agent          | Type        | Message                                    |
+|---------------------|----------------|-------------|--------------------------------------------|
+| 2026-03-24 17:43:12 | Review Agent   | parse_error | JSON/validation error — attempting self-heal |
+| 2026-03-24 17:43:15 | Review Agent   | self_heal   | Self-heal succeeded — corrected JSON accepted |
+| 2026-03-24 17:41:05 | Architecture.. | retry       | Attempt 1/3 failed — retrying in 5s        |
+```
+
+The log is written after every completed stage (not just at pipeline end) so it reflects the run state even if the pipeline is interrupted.
 
 ---
 
@@ -1077,6 +1123,8 @@ artifacts/run_20260318_120000/
 ├── 07_deployment_artifact.json           # Deployment Agent — CI/CD + K8s + Helm
 ├── *_agent_history.json                 # full LLM conversation history per agent
 ├── DECISIONS_LOG.md                     # ← human-readable audit log of all agent decisions
+│   │                                        #   + Pipeline Events table (retries, self-heals)
+│   │                                        #   Updated after EVERY completed stage
 └── generated/                           # ← all generated source code + IaC
     ├── backend/                         # Language/framework — configurable (default: Kotlin/Spring Boot)
     │   ├── build.gradle.kts             #   (or pyproject.toml, go.mod, package.json …)
@@ -1171,7 +1219,10 @@ llm-sdlc-workflow/                        ← repo root
 │   └── test_pipeline.py
 │
 ├── examples/
-│   └── hello_world_requirements.txt     # minimal 3-tier app example
+│   ├── status_api_requirements.txt      # minimal single-endpoint API (simplest — best for first run)
+│   ├── ping_echo_requirements.txt       # Kotlin Spring Boot ping + echo endpoints
+│   ├── todo_api_requirements.txt        # full CRUD TODO API with persistence
+│   └── hello_world_requirements.txt    # full 3-tier (backend + BFF + frontend)
 │
 └── .github/
     └── workflows/
