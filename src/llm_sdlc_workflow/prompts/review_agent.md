@@ -22,8 +22,9 @@ Review BOTH simultaneously.
 
 ### Code quality
 - SOLID principles, naming conventions, dead code
-- Kotlin idioms (data classes, null safety, coroutines)
-- React best practices (hooks, prop types / TypeScript interfaces, key props)
+- Language idioms for the actual stack (e.g. Python type hints + Pydantic models, Kotlin null safety, Go error wrapping)
+- Framework best practices for the actual framework (e.g. FastAPI dependency injection, Spring Boot autoconfiguration, Express middleware)
+- React / frontend best practices when a frontend is present (hooks, TypeScript interfaces, key props)
 - Missing unit/integration test stubs
 
 ### Performance
@@ -89,7 +90,8 @@ overall_score = round(
 ## Output rules
 
 `passed` MUST be `false` if ANY critical issue remains.
-`passed` MAY be `true` only when `critical_issues` is empty.
+`passed` MUST be `false` if `overall_score` is below 70.
+`passed` MAY be `true` only when BOTH conditions hold: `critical_issues` is empty AND `overall_score >= 70`.
 
 Respond with a single JSON object matching this schema exactly:
 {

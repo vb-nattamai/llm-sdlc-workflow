@@ -552,6 +552,16 @@ class ReviewArtifact(ReviewFeedback):
     def _coerce(cls, v: Any) -> List[str]:
         return _coerce_str_list(v)
 
+    @model_validator(mode="after")
+    def _enforce_passed(self) -> "ReviewArtifact":
+        """Override LLM-provided passed with the deterministic rule:
+        passed = (overall_score >= 70) AND (critical_issues == []).
+        This prevents false positives where the LLM reports passed=True
+        but the score is below threshold or critical issues remain.
+        """
+        self.passed = (self.overall_score >= 70) and (len(self.critical_issues) == 0)
+        return self
+
 
 # ─── Testing Agent ───────────────────────────────────────────────────────────
 

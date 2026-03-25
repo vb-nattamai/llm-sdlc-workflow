@@ -129,6 +129,7 @@ class PipelineConfig:
     """
     components: ComponentConfig = field(default_factory=ComponentConfig)
     tech: TechConfig = field(default_factory=TechConfig)
+    max_review_iterations: int = 3  # max review/patch cycles (overridable via pipeline.yaml)
 
     @classmethod
     def from_dict(cls, d: dict) -> "PipelineConfig":
@@ -160,8 +161,10 @@ class PipelineConfig:
         return cls(
             components=ComponentConfig(
                 backend=comp.get("backend", True),
-                bff=comp.get("bff", True),
-                frontend=comp.get("frontend", True),
+                # Default to False when key is absent — pipeline.yaml is CLI-driven
+                # (API-only by default).  Explicit true enables the sub-agent.
+                bff=comp.get("bff", False),
+                frontend=comp.get("frontend", False),
                 mobile_platforms=mobile_platforms,
             ),
             tech=TechConfig(
@@ -171,6 +174,9 @@ class PipelineConfig:
                 bff_framework=tech.get("bff_framework"),
                 frontend_framework=tech.get("frontend_framework"),
                 frontend_language=tech.get("frontend_language"),
+            ),
+            max_review_iterations=int(
+                d.get("pipeline", {}).get("max_review_iterations", 3)
             ),
         )
 

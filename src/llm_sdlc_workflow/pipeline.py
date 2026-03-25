@@ -196,7 +196,7 @@ class Pipeline:
         self.engineering_agent = EngineeringAgent(
             artifacts_dir, generated_dir_name=project_name, config=self.config
         )
-        self.infrastructure_agent = InfrastructureAgent(artifacts_dir, generated_dir_name=project_name)
+        self.infrastructure_agent = InfrastructureAgent(artifacts_dir, generated_dir_name=project_name, config=self.config)
         self.deployment_agent = DeploymentAgent(artifacts_dir, generated_dir_name=project_name)
         self.review_agent = ReviewAgent(artifacts_dir)
         self.testing_agent = TestingAgent(artifacts_dir, generated_dir_name=project_name)
@@ -354,8 +354,8 @@ class Pipeline:
             f"[bold]🚀 LLM SDLC Workflow {_action}[/bold]\n\n"
             "Discovery → Architecture → [Test] → Spec → "
             "[Engineering ‖ Infrastructure] → "
-            "Review loop (max " + str(MAX_REVIEW_ITERATIONS) + ") → "
-            "[Containers ‖ Deployment CI/CD] → [Live Test + Cypress] → [Final Test]\n\n"
+            "Review loop (max " + str(self.config.max_review_iterations) + ") → "
+            "[Containers ‖ Deployment CI/CD] → [Live HTTP Test] → [Final Test]\n\n"
             f"[dim]{self.config.summary()}[/dim]",
             title="Pipeline",
             style="bold blue",
@@ -369,6 +369,15 @@ class Pipeline:
                 self._step_header("Step 1", "Discovery Agent", "Analysing requirements, goals, constraints and risks")
                 result.intent = await self.discovery_agent.run(requirements)
                 self._step_done("Discovery", len(result.intent.requirements), "requirements extracted")
+                
+                # Extract tech stack from requirements and update config
+                self._extract_tech_stack_from_requirements(requirements)
+                
+                # Reinitialize engineering agent with updated tech config
+                self.engineering_agent = EngineeringAgent(
+                    self.artifacts_dir, generated_dir_name=self.project_name, config=self.config
+                )
+                
                 self._print_decisions("Discovery", result.intent.decisions)
                 self._write_decision_log(result)
                 await self._await_human(
@@ -542,7 +551,7 @@ class Pipeline:
             else:
                 self._step_header(
                     "Step 5", "Engineering + Infrastructure",
-                    "Generating code and IaC in parallel (Kotlin/React + Docker)"
+                    f"Generating code and IaC in parallel ({self.config.tech.backend_hint() or 'Python / FastAPI'} + Docker)"
                 )
                 result.engineering, result.infra_plan = await asyncio.gather(
                     self.engineering_agent.run(result.intent, result.architecture, result.generated_spec),
@@ -565,7 +574,7 @@ class Pipeline:
 
             # ── Step 6: Review loop ─────────────────────────────────────────
             previous_feedback = None
-            for iteration in range(1, MAX_REVIEW_ITERATIONS + 1):
+            for iteration in range(1, self.config.max_review_iterations + 1):
                 # Resume guard: skip entire loop if checkpoint already has review iterations
                 if _skip("review") and result.review_iterations:
                     if iteration == 1:
@@ -573,7 +582,7 @@ class Pipeline:
                     break
                 self._step_header(
                     f"Step 6 (iter {iteration})", "Review Agent",
-                    f"Reviewing code + IaC — iteration {iteration}/{MAX_REVIEW_ITERATIONS}"
+                    f"Reviewing code + IaC — iteration {iteration}/{self.config.max_review_iterations}"
                 )
                 review = await self.review_agent.run(
                     intent=result.intent,
@@ -606,7 +615,7 @@ class Pipeline:
                         ),
                         loop_controls=True,
                     )
-                    if _rdecision == HumanDecision.FORCE_LOOP and iteration < MAX_REVIEW_ITERATIONS:
+                    if _rdecision == HumanDecision.FORCE_LOOP and iteration < self.config.max_review_iterations:
                         console.print(
                             "[yellow]🔄 Human requested additional review iteration…[/yellow]\n"
                         )
@@ -614,10 +623,10 @@ class Pipeline:
                         continue
                     break
 
-                if iteration < MAX_REVIEW_ITERATIONS:
+                if iteration < self.config.max_review_iterations:
                     _rdecision = await self._await_human(
                         checkpoint=(
-                            f"❌ Review Failed — iteration {iteration}/{MAX_REVIEW_ITERATIONS}"
+                            f"❌ Review Failed — iteration {iteration}/{self.config.max_review_iterations}"
                         ),
                         details=[
                             f"Score       : {review.overall_score}/100",
@@ -642,7 +651,7 @@ class Pipeline:
                         break
                     console.print(
                         f"[yellow]🔄 Review failed — applying feedback and re-generating "
-                        f"(iteration {iteration + 1}/{MAX_REVIEW_ITERATIONS})…[/yellow]"
+                        f"(iteration {iteration + 1}/{self.config.max_review_iterations})…[/yellow]"
                     )
                     # Apply feedback to both agents in parallel
                     result.engineering, result.infra_plan = await asyncio.gather(
@@ -658,7 +667,7 @@ class Pipeline:
                     previous_feedback = review
                 else:
                     console.print(
-                        f"[red]⚠ Max review iterations ({MAX_REVIEW_ITERATIONS}) reached. "
+                        f"[red]⚠ Max review iterations ({self.config.max_review_iterations}) reached. "
                         "Continuing with best effort.[/red]\n"
                     )
 
@@ -666,7 +675,7 @@ class Pipeline:
             if not _skip("review") and result.review and not result.review.passed:
                 crit = result.review.critical_issues
                 raise PipelineHaltError(
-                    f"Review failed after {MAX_REVIEW_ITERATIONS} iteration(s). "
+                    f"Review failed after {self.config.max_review_iterations} iteration(s). "
                     f"Unresolved critical issues: {crit or '[none flagged]'}"
                 )
 
@@ -1038,6 +1047,92 @@ class Pipeline:
         if remaining > 0:
             console.print(f"[dim]   … {remaining} more → {log_path}[/dim]")
         console.print()
+
+    def _extract_tech_stack_from_requirements(self, requirements: str) -> None:
+        """Parse tech stack from requirements text and update self.config.tech accordingly.
+        
+        Looks for a "Technology:" section in the requirements and extracts language/framework info.
+        """
+        import re
+        
+        # Look for "Technology:" section
+        tech_match = re.search(r'Technology:\s*\n?(.*?)(?:\n\n|\n[A-Z]|$)', requirements, re.DOTALL | re.IGNORECASE)
+        if not tech_match:
+            return
+            
+        tech_section = tech_match.group(1).strip()
+        console.print(f"[dim]🔧 Extracted tech stack from requirements: {tech_section[:100]}...[/dim]")
+        
+        # Parse common patterns
+        tech_lower = tech_section.lower()
+        
+        # Backend language/framework
+        if 'python' in tech_lower:
+            self.config.tech.backend_language = 'Python'
+            if 'fastapi' in tech_lower:
+                self.config.tech.backend_framework = 'FastAPI'
+            elif 'flask' in tech_lower:
+                self.config.tech.backend_framework = 'Flask'
+            elif 'django' in tech_lower:
+                self.config.tech.backend_framework = 'Django'
+        elif 'node.js' in tech_lower or 'nodejs' in tech_lower or 'node' in tech_lower:
+            self.config.tech.backend_language = 'Node.js'
+            if 'express' in tech_lower:
+                self.config.tech.backend_framework = 'Express'
+            elif 'nest' in tech_lower:
+                self.config.tech.backend_framework = 'NestJS'
+        elif 'go' in tech_lower or 'golang' in tech_lower:
+            self.config.tech.backend_language = 'Go'
+            if 'gin' in tech_lower:
+                self.config.tech.backend_framework = 'Gin'
+        elif 'kotlin' in tech_lower:
+            self.config.tech.backend_language = 'Kotlin'
+            if 'spring' in tech_lower:
+                self.config.tech.backend_framework = 'Spring Boot'
+        elif 'java' in tech_lower:
+            self.config.tech.backend_language = 'Java'
+            if 'spring' in tech_lower:
+                self.config.tech.backend_framework = 'Spring Boot'
+        
+        # BFF stack
+        if 'bff' in tech_lower or 'backend for frontend' in tech_lower:
+            if 'node.js' in tech_lower or 'nodejs' in tech_lower:
+                self.config.tech.bff_language = 'Node.js'
+                if 'express' in tech_lower:
+                    self.config.tech.bff_framework = 'Express'
+                elif 'nest' in tech_lower:
+                    self.config.tech.bff_framework = 'NestJS'
+            elif 'python' in tech_lower:
+                self.config.tech.bff_language = 'Python'
+                if 'fastapi' in tech_lower:
+                    self.config.tech.bff_framework = 'FastAPI'
+            elif 'kotlin' in tech_lower:
+                self.config.tech.bff_language = 'Kotlin'
+                if 'spring' in tech_lower:
+                    self.config.tech.bff_framework = 'Spring WebFlux'
+        
+        # Frontend stack
+        if 'react' in tech_lower:
+            self.config.tech.frontend_framework = 'React'
+            if 'typescript' in tech_lower or 'ts' in tech_lower:
+                self.config.tech.frontend_language = 'TypeScript'
+            else:
+                self.config.tech.frontend_language = 'JavaScript'
+        elif 'vue' in tech_lower:
+            self.config.tech.frontend_framework = 'Vue'
+            if 'typescript' in tech_lower or 'ts' in tech_lower:
+                self.config.tech.frontend_language = 'TypeScript'
+        elif 'angular' in tech_lower:
+            self.config.tech.frontend_framework = 'Angular'
+            self.config.tech.frontend_language = 'TypeScript'
+        elif 'next.js' in tech_lower or 'next' in tech_lower:
+            self.config.tech.frontend_framework = 'Next.js'
+            self.config.tech.frontend_language = 'TypeScript'
+        
+        # Update banner with detected tech stack
+        backend_hint = self.config.tech.backend_hint()
+        if backend_hint:
+            console.print(f"[dim]🔧 Tech stack configured: {backend_hint}[/dim]")
 
     def _drain_agent_events(self, result: "PipelineResult") -> None:
         """Collect events emitted by all agent instances into result.pipeline_events.

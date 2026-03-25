@@ -9,8 +9,6 @@ from .base_agent import BaseAgent, load_prompt
 
 SYSTEM_PROMPT = load_prompt("bff_agent.md")
 
-_BFF_DEFAULT = "Kotlin/Spring WebFlux (Spring Boot 3.3, Kotlin 1.9, Gradle Kotlin DSL)"
-
 
 class BffAgent(BaseAgent):
     def __init__(
@@ -22,7 +20,8 @@ class BffAgent(BaseAgent):
     ):
         super().__init__(name="BFF Agent", artifacts_dir=artifacts_dir, generated_dir_name=generated_dir_name)
         parts = [p for p in [language, framework] if p]
-        self.tech_hint = " / ".join(parts) if parts else _BFF_DEFAULT
+        # No default — agent chooses tech from requirements when not explicitly set
+        self.tech_hint = " / ".join(parts) if parts else ""
 
     async def run(
         self,
@@ -37,21 +36,23 @@ class BffAgent(BaseAgent):
         feedback_section = self._build_feedback_section(review_feedback)
 
         if review_feedback and current_artifact:
-            # Targeted patch mode: fix specific issues in existing code rather
-            # than regenerating all files from scratch (prevents new-bug churn).
+            # Targeted patch mode — include tech_hint so LLM never forgets the stack
+            _spec_ctx = (f"Tech stack: {self.tech_hint}\n\n" if self.tech_hint else "")
+            if contract.openapi_spec:
+                _spec_ctx += contract.openapi_spec[:3000]
             artifact = await self._patch_files_chunked(
                 system=SYSTEM_PROMPT,
                 existing_artifact=current_artifact,
                 feedback=review_feedback,
                 model_class=EngineeringArtifact,
                 file_keys=["generated_files"],
-                spec_context=contract.openapi_spec[:3000] if contract.openapi_spec else "",
+                spec_context=_spec_ctx,
             )
         else:
+            tech_line = f"Tech stack: {self.tech_hint}\n" if self.tech_hint else ""
             plan_message = f"""Plan and list every file for the bff/ service.
 
-Tech stack: {self.tech_hint}
-
+{tech_line}
 ## Discovery
 {self._compact(intent)}
 
@@ -61,10 +62,11 @@ Tech stack: {self.tech_hint}
 
 Return JSON with every file's content = "__PENDING__". Valid json."""
 
+            tech_prefix = f"Write COMPLETE, RUNNABLE {self.tech_hint} content" if self.tech_hint else "Write COMPLETE, RUNNABLE content"
             fill_tmpl = (
-                f"Write COMPLETE, RUNNABLE {self.tech_hint} content for: {{path}}\n"
+                f"{tech_prefix} for: {{path}}\n"
                 "Purpose: {purpose}\n"
-                "Service: bff (port 8080, calls backend:8081)\n"
+                "Service: bff — port and upstream URL are defined in the topology section above\n"
                 "Architecture: {arch_style}\n"
                 "BFF endpoints: {endpoints_summary}\n\n"
                 "Return JSON: {{\"content\": \"<full file>\"}}\n"

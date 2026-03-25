@@ -1,0 +1,18 @@
+Build a simple "Hello World" API service.
+
+Requirements:
+1. GET /hello → returns JSON: { "message": "Hello, World!", "timestamp": "<ISO datetime>" }
+2. GET /health → returns JSON: { "status": "ok" }
+
+Technology stack:
+- Python with FastAPI
+- Uvicorn ASGI server
+- Port 8080
+- No database
+- Stateless service
+- Docker containerization
+
+Success criteria:
+- docker compose up --build works
+- GET http://localhost:8080/hello returns HTTP 200 with correct JSON
+- GET http://localhost:8080/health returns HTTP 200 with correct JSON

@@ -164,27 +164,43 @@ Examples:
     # ── Component toggles ──────────────────────────────────────────────────
     comp = parser.add_argument_group("component toggles")
     comp.add_argument(
+        "--bff", action="store_true",
+        help="Enable the BFF sub-agent (disabled by default for API-only projects)."
+    )
+    comp.add_argument(
         "--no-bff", action="store_true",
-        help="Disable the BFF sub-agent (useful for pure API or mobile-only projects)."
+        help="Explicitly disable the BFF sub-agent (already off by default)."
+    )
+    comp.add_argument(
+        "--frontend", action="store_true",
+        help="Enable the Frontend sub-agent (disabled by default for API-only projects)."
     )
     comp.add_argument(
         "--no-frontend", action="store_true",
-        help="Disable the Frontend sub-agent (API-only or mobile project)."
+        help="Explicitly disable the Frontend sub-agent (already off by default)."
     )
     comp.add_argument(
         "--mobile", action="store_true",
         help="Enable the Mobile sub-agent (React Native by default)."
+    )
+    parser.add_argument(
+        "--max-review-iterations", metavar="N", type=int, dest="max_review_iterations",
+        default=None,
+        help=(
+            "Maximum number of review/patch loop iterations (default: 3, or pipeline.yaml "
+            "pipeline.max_review_iterations). Increase for more thorough hardening."
+        )
     )
 
     # ── Tech-stack preferences ────────────────────────────────────────────
     tech = parser.add_argument_group("tech-stack preferences")
     tech.add_argument(
         "--backend-lang", metavar="LANG",
-        help='Backend programming language, e.g. "Python", "Go", "Node.js". Default: Kotlin.'
+        help='Backend programming language, e.g. "Python", "Go", "Node.js". Default: Python.'
     )
     tech.add_argument(
         "--backend-framework", metavar="FRAMEWORK",
-        help='Backend framework, e.g. "FastAPI", "Gin", "Express". Default: Spring Boot.'
+        help='Backend framework, e.g. "FastAPI", "Gin", "Express". Default: FastAPI.'
     )
     tech.add_argument(
         "--bff-lang", metavar="LANG",
@@ -216,9 +232,17 @@ Examples:
 
 
 def _apply_config(args: argparse.Namespace) -> None:
-    """Merge a pipeline.yaml config file into args. CLI flags take precedence."""
+    """Merge a pipeline.yaml config file into args. CLI flags take precedence.
+
+    If --config is not given, auto-loads pipeline.yaml from the current working
+    directory when it exists (silent no-op if absent).
+    """
     if not args.config:
-        return
+        default = os.path.join(os.getcwd(), "pipeline.yaml")
+        if os.path.exists(default):
+            args.config = default
+        else:
+            return
 
     config_path = args.config
     if not os.path.exists(config_path):
@@ -240,9 +264,17 @@ def _apply_config(args: argparse.Namespace) -> None:
     if not args.output_dir and cfg.get("output_dir"):
         args.output_dir = cfg["output_dir"]
 
+    # pipeline block (model, max_review_iterations)
+    pipeline_cfg = cfg.get("pipeline") or {}
+
     # model — only apply if user didn't pass --model explicitly and env var not set
-    if args.model == os.getenv("PIPELINE_MODEL", "gpt-4o") and cfg.get("model"):
-        args.model = cfg["model"]
+    yaml_model = pipeline_cfg.get("model") or cfg.get("model")
+    if args.model == os.getenv("PIPELINE_MODEL", "gpt-4o") and yaml_model:
+        args.model = yaml_model
+
+    # max_review_iterations — override the hard-coded constant when specified in YAML
+    if pipeline_cfg.get("max_review_iterations") and not getattr(args, "max_review_iterations", None):
+        args.max_review_iterations = int(pipeline_cfg["max_review_iterations"])
 
     # spec block
     spec_cfg = cfg.get("spec") or {}
@@ -268,9 +300,17 @@ def _apply_config(args: argparse.Namespace) -> None:
     comp_cfg = cfg.get("components") or {}
     tech_cfg = cfg.get("tech") or {}
 
-    if not args.no_bff and comp_cfg.get("bff") is False:
+    # bff: true in yaml enables BFF (unless --no-bff was explicitly passed)
+    if comp_cfg.get("bff") is True and not args.no_bff:
+        args.bff = True
+    # bff: false in yaml disables BFF (unless --bff was explicitly passed)
+    if comp_cfg.get("bff") is False and not getattr(args, "bff", False):
         args.no_bff = True
-    if not args.no_frontend and comp_cfg.get("frontend") is False:
+    # frontend: true in yaml enables frontend (unless --no-frontend was explicitly passed)
+    if comp_cfg.get("frontend") is True and not args.no_frontend:
+        args.frontend = True
+    # frontend: false in yaml disables frontend (unless --frontend was explicitly passed)
+    if comp_cfg.get("frontend") is False and not getattr(args, "frontend", False):
         args.no_frontend = True
     # New form: components.mobile_platforms list
     yaml_platforms = comp_cfg.get("mobile_platforms") or []
@@ -507,8 +547,8 @@ async def async_main(args: argparse.Namespace, requirements: str, spec, existing
     pipeline_config = PipelineConfig(
         components=ComponentConfig(
             backend=True,  # always enabled
-            bff=not getattr(args, "no_bff", False),
-            frontend=not getattr(args, "no_frontend", False),
+            bff=getattr(args, "bff", False) and not getattr(args, "no_bff", False),
+            frontend=getattr(args, "frontend", False) and not getattr(args, "no_frontend", False),
             mobile_platforms=raw_platforms,
         ),
         tech=TechConfig(
@@ -519,6 +559,7 @@ async def async_main(args: argparse.Namespace, requirements: str, spec, existing
             frontend_framework=getattr(args, "frontend_framework", None),
             frontend_language=getattr(args, "frontend_lang", None),
         ),
+        max_review_iterations=getattr(args, "max_review_iterations", None) or 3,
     )
 
     # Thread model selection through the env var that base_agent.py reads

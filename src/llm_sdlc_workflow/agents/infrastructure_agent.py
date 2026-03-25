@@ -28,6 +28,9 @@ from llm_sdlc_workflow.models.artifacts import (
     ReviewFeedback,
 )
 from llm_sdlc_workflow.config import TopologyContract
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from llm_sdlc_workflow.config import PipelineConfig
 from .base_agent import BaseAgent, load_prompt
 
 SYSTEM_PROMPT = load_prompt("infrastructure_agent.md")
@@ -36,8 +39,36 @@ console = Console()
 
 
 class InfrastructureAgent(BaseAgent):
-    def __init__(self, artifacts_dir: str = "./artifacts", generated_dir_name: str = "generated"):
+    def __init__(
+        self,
+        artifacts_dir: str = "./artifacts",
+        generated_dir_name: str = "generated",
+        config: Optional["PipelineConfig"] = None,
+    ):
         super().__init__(name="Infrastructure Agent", artifacts_dir=artifacts_dir, generated_dir_name=generated_dir_name)
+        # _config_tech_hint is set only when the user EXPLICITLY configured a stack;
+        # otherwise InfrastructureAgent reads the stack from the engineering artifact at run time.
+        if config is not None and config.tech.backend_hint():
+            backend = config.tech.backend_hint()
+            frontend = config.tech.frontend_hint() if config.components.frontend else None
+            parts = [f"Backend: {backend}"]
+            if frontend:
+                parts.append(f"Frontend: {frontend}")
+            self._config_tech_hint: Optional[str] = " | ".join(parts)
+        else:
+            self._config_tech_hint = None
+
+    def _tech_hint_from_engineering(self, engineering: EngineeringArtifact) -> str:
+        """Derive the tech stack hint from the engineering artifact.
+        Falls back to explicit config hint, then to no constraint (agent decides)."""
+        if engineering.backend_tech:
+            hint = f"Backend: {engineering.backend_tech.language} / {engineering.backend_tech.framework}"
+            if engineering.frontend_tech:
+                hint += f" | Frontend: {engineering.frontend_tech.language} / {engineering.frontend_tech.framework}"
+            return hint
+        if self._config_tech_hint:
+            return self._config_tech_hint
+        return ""  # agent infers from engineering files
 
     async def run(
         self,
@@ -53,6 +84,8 @@ class InfrastructureAgent(BaseAgent):
         Generate IaC via chunked LLM calls, write files, start containers,
         and wait for the service to be healthy.
         """
+        # Derive tech hint from what BackendAgent actually produced, not from config defaults
+        self._tech_hint = self._tech_hint_from_engineering(engineering)
         feedback_section = ""
         if review_feedback:
             lines = [
@@ -68,7 +101,16 @@ class InfrastructureAgent(BaseAgent):
 
         topology_section = topology.topology_section() if topology else ""
 
+        _tech_section = (
+            f"## Tech Stack (MUST match exactly — derived from engineering artifact)\n{self._tech_hint}"
+        ) if self._tech_hint else (
+            "## Tech Stack\nRead the generated source files in the Engineering Summary to determine "
+            "the language and framework, then match them exactly in all Dockerfiles."
+        )
+
         plan_message = f"""Generate Infrastructure as Code to containerise this application.
+
+{_tech_section}
 
 ## Discovery Summary
 {self._compact(intent)}
@@ -85,15 +127,23 @@ The generated application files already exist in the working directory.
 Produce Dockerfiles and docker-compose.yml so the full stack starts with:
   docker compose up --build
 
+IMPORTANT: Dockerfiles MUST match the tech stack — do NOT substitute a different language or framework.
+
 Return JSON with iac_files where every file's content is set to \"__PENDING__\".
 This is a json response."""
+
+        _tech_fill = (
+            f"Tech stack: {self._tech_hint} — do NOT change it.\n"
+        ) if self._tech_hint else (
+            "Tech stack: match the language and framework used in the existing source files exactly.\n"
+        )
 
         fill_message_tmpl = (
             "Write the COMPLETE content for the IaC file at path: {path}\n"
             "Purpose: {purpose}\n\n"
             "## Context\n"
-            "Backend: Kotlin/Java Spring Boot 3 (Gradle) | Frontend: React 18 + Vite (Node)\n"
-            "Architecture: {arch_style}\n"
+            + _tech_fill
+            + "Architecture: {arch_style}\n"
             "{topology_hint}\n\n"
             "Return JSON: {{\"content\": \"<full file text>\"}}\n"
             "No truncation, no placeholders. Valid json response."
@@ -169,7 +219,7 @@ This is a json response."""
         self,
         intent: DiscoveryArtifact,        # noqa: ARG002 — kept for call-site API compat
         architecture: ArchitectureArtifact,  # noqa: ARG002
-        engineering: EngineeringArtifact,   # noqa: ARG002
+        engineering: EngineeringArtifact,
         current: InfrastructureArtifact,
         feedback: ReviewFeedback,
     ) -> InfrastructureArtifact:
@@ -179,6 +229,8 @@ This is a json response."""
         the LLM together with the specific review issues so it can make surgical
         fixes rather than re-imagining everything from scratch.
         """
+        # Always re-derive from the live engineering artifact so we never drift
+        self._tech_hint = self._tech_hint_from_engineering(engineering)
         next_iter = current.review_iteration + 1
         console.print(
             f"[yellow]🔄 Infrastructure: applying review feedback "
@@ -187,12 +239,21 @@ This is a json response."""
         if current.container_running:
             await self.stop_containers()
 
+        tech_context = (
+            f"## Tech Stack (derived from engineering artifact — do NOT change)\n{self._tech_hint}\n"
+            "Every IaC file must match this exact stack. Do not substitute a different language or framework."
+        ) if self._tech_hint else (
+            "## Tech Stack\nMATCH the tech stack of the existing source files exactly. "
+            "Do NOT substitute a different language or framework."
+        )
+
         artifact = await self._patch_files_chunked(
             system=SYSTEM_PROMPT,
             existing_artifact=current,
             feedback=feedback,
             model_class=InfrastructureArtifact,
             file_keys=["iac_files"],
+            spec_context=tech_context,
         )
 
         artifact.review_iteration = next_iter

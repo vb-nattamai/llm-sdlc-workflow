@@ -17,8 +17,8 @@
 
 # ─── Component Toggles ───────────────────────────────────────────────────────
 # Control which service sub-agents are enabled.
-# All components are ON by default. Set to false to disable.
-# Overridden by --no-bff, --no-frontend, --mobile on the CLI.
+# Backend is always on. BFF and frontend are OFF by default (API-only mode).
+# Enable them explicitly with true, or use --bff / --frontend on the CLI.
 components:
   backend: true        # Always recommended. Set false to... why would you?
   bff: false           # Backend-for-Frontend proxy layer. Set true if you need a BFF tier.
@@ -62,6 +62,17 @@ tech:
   frontend_language: null     # e.g. "TypeScript", "JavaScript"
 
   # Note: mobile platform is set via components.mobile_platforms (list), not here.
+
+# ─── Pipeline Behaviour ──────────────────────────────────────────────────────
+# Controls review loop depth and model selection.
+# Overridden by --max-review-iterations and --model on the CLI.
+pipeline:
+  # Maximum number of review → patch cycles (default: 3).
+  max_review_iterations: 3
+
+  # LLM model override — uncomment to pin a model for this project.
+  # Overrides the PIPELINE_MODEL env var when set.
+  # model: claude-haiku-4-5-20251001
 
 # ─── Spec-Driven Development ─────────────────────────────────────────────────
 # These constraints are forwarded to the Architecture and Engineering agents.

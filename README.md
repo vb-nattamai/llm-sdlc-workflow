@@ -3,11 +3,23 @@
 > Turn raw requirements into a running full-stack monorepo application — automatically.
 > Spec-driven, contract-first, and designed to extend incrementally across your entire SDLC.
 
-A fully automated software development pipeline where specialised AI agents collaborate across every phase: from requirements discovery through system architecture, contract-first spec generation, parallel code generation, infrastructure-as-code, automated testing with Cypress, and iterative code review with a feedback loop.
+A fully automated software development pipeline where specialised AI agents collaborate across every phase: from requirements discovery through system architecture, contract-first spec generation, parallel code generation, infrastructure-as-code, automated live HTTP testing, and iterative code review with a feedback loop.
 
 The pipeline is **fully configurable**: choose which services to generate (backend, BFF, frontend, mobile), override the language and framework for each service, and tune everything from a single `pipeline.yaml` or via CLI flags — no Python changes required.
 
-Runs on **GitHub Models** via your **GitHub Copilot licence** — no separate API credits required.
+Supports multiple LLM providers (Anthropic, GitHub Copilot, and others). Provide credentials and model selection
+via environment variables: `PIPELINE_BASE_URL`, `PIPELINE_API_KEY`, and `PIPELINE_MODEL`.
+
+Example (Anthropic):
+
+```bash
+PIPELINE_BASE_URL="https://api.anthropic.com/v1" \
+PIPELINE_API_KEY="$ANTHROPIC_API_KEY" \
+PIPELINE_MODEL="claude-haiku-4-5-20251001" \
+python3.11 main.py --requirements reqs.txt --project-name my_project --auto
+```
+
+The pipeline will use the configured model endpoint for all agent calls.
 
 ---
 
@@ -112,7 +124,7 @@ Runs on **GitHub Models** via your **GitHub Copilot licence** — no separate AP
   ║                                                                 ║
   ║   ┌─────────────────────────────────────────────────────────┐  ║
   ║   │                   Testing Agent                          │  ║
-  ║   │     Live HTTP tests + Cypress e2e spec generation        │  ║
+  ║   │     Live HTTP tests via httpx (curl-equivalent)             │  ║
   ║   │           → 05b_testing_infrastructure.json             │  ║
   ║   └────────────────────────┬────────────────────────────────┘  ║
   ║                            │                                    ║
@@ -131,7 +143,6 @@ Runs on **GitHub Models** via your **GitHub Copilot licence** — no separate AP
   ║             │                              └──► Testing Stage 2 ║
   ╚═════════════╪═════════════════════════════════════════════════╝
                 │  ✓ live tests pass
-                │    + generated/cypress/ Cypress e2e specs written
                 ▼
   ┌─────────────────────────────────────────────────────────────┐
   │         Testing Agent  [Stage 3 — Final Sign-off]           │
@@ -150,14 +161,14 @@ Runs on **GitHub Models** via your **GitHub Copilot licence** — no separate AP
 | **Architecture Agent** | Designs the system: components, data flow, API contracts, security model. Uses two-phase LLM calls: phase 1 = structure; phase 2 = design decisions | `ArchitectureArtifact` |
 | **Spec Agent** | Generates the **forward contract** (OpenAPI 3.0 + SQL DDL) that all engineering implements against | `GeneratedSpecArtifact` |
 | **Engineering Agent** | Orchestrates BE + BFF + FE sub-agents in parallel via `asyncio.gather` | `EngineeringArtifact` |
-| ↳ **Backend Agent** | Kotlin 1.9 + Spring Boot 3.3 + Gradle + JPA + JWT — files under `backend/` | `ServiceArtifact` |
-| ↳ **BFF Agent** | Kotlin Spring WebFlux + coroutines, calls `backend:8081` — files under `bff/` | `ServiceArtifact` |
-| ↳ **Frontend Agent** | React 18 + TypeScript 5 + Vite → Nginx, calls `bff:8080` — files under `frontend/` | `ServiceArtifact` |
-| ↳ **Mobile Agent** | React Native (Expo SDK 51) by default; supports Flutter, Swift, Kotlin — files under `mobile/`. Opt-in via `--mobile` or `components.mobile: true` | `ServiceArtifact` |
-| **Infrastructure Agent** | Dockerfiles + docker-compose for the full monorepo stack | `InfrastructureArtifact` |
+| ↳ **Backend Agent** | Tech-agnostic backend (configurable language/framework) — files under `backend/` | `ServiceArtifact` |
+| ↳ **BFF Agent** | Tech-agnostic BFF layer (configurable language/framework), calls backend — files under `bff/`. **Opt-in** (`components.bff: true`) | `ServiceArtifact` |
+| ↳ **Frontend Agent** | Tech-agnostic frontend (configurable framework/language) — files under `frontend/`. **Opt-in** (`components.frontend: true`) | `ServiceArtifact` |
+| ↳ **Mobile Agent** | Tech-agnostic mobile apps (configurable platforms) — files under `mobile/`. Opt-in via `--mobile` or `components.mobile: true` | `ServiceArtifact` |
+| **Infrastructure Agent** | Dockerfiles + docker-compose for the full stack; tech-stack-aware (respects configured language/framework) | `InfrastructureArtifact` |
 | **Deployment Agent** | GitHub Actions CI/CD workflows, Kubernetes manifests, Helm chart, blue-green + canary strategies, rollback scripts | `DeploymentArtifact` |
-| **Review Agent** | Security (OWASP), reliability, code quality — feedback loop until no critical/high issues. Score computed by deterministic rubric: start 100, deduct 15/8/3/1 per critical/high/medium/low per dimension, weighted avg | `ReviewArtifact` |
-| **Testing Agent** | 3-stage: architecture plan → live HTTP + Cypress e2e → final sign-off | `TestingArtifact` |
+| **Review Agent** | Security (OWASP), reliability, code quality — feedback loop until no critical/high issues. Score computed by deterministic rubric: start 100, deduct 15/8/3/1 per critical/high/medium/low per dimension, weighted avg (security×0.35, reliability×0.25, maintainability×0.25, performance×0.15). Pass only when no criticals and overall >= 70 | `ReviewArtifact` |
+| **Testing Agent** | 3-stage: architecture plan → live HTTP via httpx (curl-equivalent) → final sign-off. No Cypress/browser tests — all checks use plain HTTP request/response | `TestingArtifact` |
 
 ---
 
@@ -174,7 +185,7 @@ Runs on **GitHub Models** via your **GitHub Copilot licence** — no separate AP
 | Mobile Development (React Native, Flutter, Swift, Kotlin) | Mobile Agent | ✅ Active (opt-in) |
 | Infrastructure / IaC | Infrastructure Agent | ✅ Active |
 | Code Review & Security Audit | Review Agent | ✅ Active |
-| Testing (plan + live HTTP + Cypress e2e) | Testing Agent | ✅ Active |
+| Testing (plan + live HTTP) | Testing Agent | ✅ Active |
 | API Documentation (Swagger UI, ADRs, runbooks) | Documentation Agent | 🔜 Planned |
 | Observability (Prometheus, OpenTelemetry, Grafana) | Observability Agent | 🔜 Planned |
 | CI/CD Pipelines (GitHub Actions, K8s, Helm, canary + blue-green) | Deployment Agent | ✅ Active |
@@ -186,9 +197,20 @@ Runs on **GitHub Models** via your **GitHub Copilot licence** — no separate AP
 
 ---
 
+## Deterministic Review Scoring
+
+- Per-dimension score: start at 100 and deduct per-issue penalties: critical (-15), high (-8), medium (-3), low (-1).
+- Overall score: weighted average across dimensions: **security × 0.35**, **reliability × 0.25**, **maintainability × 0.25**, **performance × 0.15**.
+- Pass criteria: **no critical issues** AND **overall_score >= 70**.
+
+This deterministic formula replaces free-form model scoring so results are reproducible and comparable across iterations. See `src/llm_sdlc_workflow/prompts/review_agent.md` for the exact prompt text used by the Review Agent.
+
+
 ## Configuring the Pipeline
 
-By default the pipeline generates a full Kotlin/Spring Boot backend, Kotlin/Spring WebFlux BFF, and React 18/TypeScript frontend. Everything is overridable — with CLI flags, `pipeline.yaml`, or Python API — and no code changes are ever required.
+By default the pipeline generates a **tech-agnostic backend only** (BFF and frontend are **disabled**). Add BFF and/or frontend explicitly with `--bff` / `--frontend` flags or `components.bff: true` in `pipeline.yaml`. Everything is overridable — with CLI flags, `pipeline.yaml`, or environment variables — and no Python code changes are ever required.
+
+> **Tip:** `pipeline.yaml` is auto-loaded from the current working directory when present — no `--config` flag needed.
 
 ### Component Toggles
 
@@ -196,10 +218,10 @@ Control which service sub-agents run:
 
 | Flag | pipeline.yaml | Effect |
 |---|---|---|
-| _(default)_ | `components.bff: true` | BFF sub-agent enabled |
-| `--no-bff` | `components.bff: false` | BFF disabled — useful for API-only or mobile-first projects |
-| _(default)_ | `components.frontend: true` | Frontend sub-agent enabled |
-| `--no-frontend` | `components.frontend: false` | Frontend disabled — API-only or mobile project |
+| _(default)_ | `components.bff: false` | BFF sub-agent **disabled** |
+| `--bff` | `components.bff: true` | BFF enabled |
+| _(default)_ | `components.frontend: false` | Frontend sub-agent **disabled** |
+| `--no-frontend` | `components.frontend: false` | Frontend disabled (explicit) |
 | `--mobile` | `components.mobile_platforms: ["React Native"]` | Single React Native mobile app |
 | `--mobile-platform P` | `components.mobile_platforms: [P]` | Single platform of your choice |
 | `--mobile-platform P1 --mobile-platform P2` | `components.mobile_platforms: [P1, P2]` | **Multiple platforms in parallel** |
@@ -210,26 +232,25 @@ Override the language and/or framework for any service:
 
 | Flag | pipeline.yaml key | Default |
 |---|---|---|
-| `--backend-lang LANG` | `tech.backend_language` | Kotlin |
-| `--backend-framework FW` | `tech.backend_framework` | Spring Boot 3.3 |
-| `--bff-lang LANG` | `tech.bff_language` | Kotlin |
+| `--backend-lang LANG` | `tech.backend_language` | Configurable (no default) |
+| `--backend-framework FW` | `tech.backend_framework` | Configurable (no default) |
+| `--bff-lang LANG` | `tech.bff_language` | Configurable (no default) |
 | `--bff-framework FW` | `tech.bff_framework` | Spring WebFlux |
-| `--frontend-framework FW` | `tech.frontend_framework` | React 18 |
+| `--frontend-framework FW` | `tech.frontend_framework` | Configurable (no default) |
 | `--frontend-lang LANG` | `tech.frontend_language` | TypeScript |
-| `--mobile-platform PLAT` | `components.mobile_platforms: [PLAT]` | React Native (when `--mobile` is set) |
+| `--mobile-platform PLAT` | `components.mobile_platforms: [PLAT]` | Configurable (no default when `--mobile` is set) |
 
 ### Common Configurations
 
-#### Pure API project (no BFF, no frontend)
+#### Pure API project (default)
+
+No flags needed — this is the default:
 
 ```bash
-python3.11 main.py \
-  --requirements reqs.txt \
-  --no-bff \
-  --no-frontend
+python3.11 main.py --requirements reqs.txt
 ```
 
-or in `pipeline.yaml`:
+or explicitly in `pipeline.yaml` (already the default):
 
 ```yaml
 components:
@@ -237,13 +258,13 @@ components:
   frontend: false
 ```
 
-#### Python/FastAPI backend
+#### Full-stack project (backend + BFF + frontend)
 
 ```bash
 python3.11 main.py \
   --requirements reqs.txt \
-  --backend-lang Python \
-  --backend-framework FastAPI
+  --bff \
+  --frontend
 ```
 
 #### Go + Gin backend, Vue frontend
@@ -262,7 +283,7 @@ python3.11 main.py \
 python3.11 main.py \
   --requirements reqs.txt \
   --mobile
-# Generates mobile_react_native/ — React Native (Expo SDK 51) app
+# Generates mobile_react_native/ — React Native app (configurable SDK version)
 # connecting to BFF via BFF_BASE_URL env var
 ```
 
@@ -304,6 +325,13 @@ python3.11 main.py \
   --bff-framework NestJS
 ```
 
+### Tech-agnostic generation & quick E2E demo
+
+- Agents are tech-agnostic by default: leave tech entries in `pipeline.yaml` as `null` and the Discovery/Spec agents will select appropriate languages/frameworks from the requirements text.
+- For simple verification, run the included `examples/hello_api_requirements.txt` (a minimal single-endpoint service). The pipeline completed a full E2E run during testing and produced generated code and IaC under `artifacts/hello_world_run_<timestamp>/hello_world/` (OpenAPI, Dockerfile, docker-compose, backend/hello_world).
+- Use the Anthropic example environment variables (above) to run the pipeline against Anthropic models if you want to reproduce the exact run.
+
+
 ### pipeline.yaml — Full Configuration Reference
 
 All configuration options live in one file. CLI flags always override `pipeline.yaml` values.
@@ -314,8 +342,8 @@ All configuration options live in one file. CLI flags always override `pipeline.
 # ─── Component Toggles ───────────────────────────────────────────────────────
 components:
   backend: true      # Set false to... why would you?
-  bff: true          # Set false for API-only or mobile-only projects
-  frontend: true     # Set false for API-only or mobile-only projects
+  bff: false         # Set true for BFF tier (API-only projects leave this false)
+  frontend: false    # Set true for web frontend (API-only projects leave this false)
 
   # mobile_platforms: list of platforms to generate in parallel.
   # Empty (or omit) = mobile disabled.
@@ -328,21 +356,30 @@ components:
   # mobile_platforms: ["React Native", "iOS (Swift)", "Android (Kotlin)"]
 
 # ─── Tech-Stack Preferences ──────────────────────────────────────────────────
-# Leave null to use each agent's built-in default.
+# Leave null for tech-agnostic behavior (agents choose based on requirements).
 tech:
-  # Backend (default: Kotlin / Spring Boot 3.3)
-  backend_language: null     # "Python" | "Go" | "Node.js" | "Java" | ...
-  backend_framework: null    # "FastAPI" | "Gin" | "Express" | "Spring Boot" | ...
+  # Backend (configurable, no default)
+  backend_language: null     # "Kotlin" | "Go" | "Node.js" | "Java" | "Python" | ...
+  backend_framework: null    # "Spring Boot" | "Gin" | "Express" | "FastAPI" | ...
 
-  # BFF (default: Kotlin / Spring WebFlux)
-  bff_language: null         # "Node.js" | "Kotlin" | ...
-  bff_framework: null        # "NestJS" | "Spring WebFlux" | ...
+  # BFF (configurable, no default)
+  bff_language: null         # "Node.js" | "Kotlin" | "Python" | ...
+  bff_framework: null        # "NestJS" | "Spring WebFlux" | "FastAPI" | ...
 
-  # Frontend (default: React 18 / TypeScript / Vite)
-  frontend_framework: null   # "Vue" | "Angular" | "Next.js" | "Svelte" | ...
+  # Frontend (configurable, no default)
+  frontend_framework: null   # "Vue" | "Angular" | "Next.js" | "Svelte" | "React" | ...
   frontend_language: null    # "TypeScript" | "JavaScript"
 
   # Note: mobile platform(s) are set via components.mobile_platforms above.
+
+# ─── Pipeline Behaviour ──────────────────────────────────────────────────────
+pipeline:
+  # Maximum number of review → patch cycles before halting (default: 3).
+  # Increase for more thorough hardening; decrease for faster iteration.
+  max_review_iterations: 3
+
+  # LLM model to use for all agents. Overrides PIPELINE_MODEL env var.
+  # model: claude-haiku-4-5-20251001
 
 # ─── Spec-Driven Constraints ─────────────────────────────────────────────────
 spec:
@@ -505,7 +542,7 @@ Every `--from-run` continues the contract chain. The recommended workflow for a 
 # Sprint 1 — initial build
 python3.11 main.py --requirements sprint1.txt --output-dir ./artifacts/sprint1
 # └─ Human review at: 01_discovery_artifact.json, 02_architecture_artifact.json,
-#    generated/specs/openapi.yaml, 04_review_artifact.json
+#    generated/specs/openapi.yaml, 04_review_artifact_iter1.json
 
 # Sprint 2 — new feature, must not break sprint 1 API
 python3.11 main.py \
@@ -1073,15 +1110,18 @@ The chain is fully composable — every run reads `generated/specs/` from the pr
 # ─── Execution ───────────────────────────────────────────────────────────────
 --auto                    Skip all human review checkpoints (CI/CD mode)
 --model MODEL             LLM model (default: gpt-4o, or PIPELINE_MODEL env var)
+--max-review-iterations N Max review → patch cycles (default: 3, or pipeline.yaml pipeline.max_review_iterations)
 
 # ─── Component toggles ───────────────────────────────────────────────────────
---no-bff                  Disable BFF sub-agent (API-only or mobile-first projects)
---no-frontend             Disable Frontend sub-agent
+--bff                     Enable BFF sub-agent (disabled by default)
+--frontend                Enable Frontend sub-agent (disabled by default)
+--no-bff                  Explicitly disable BFF (backward-compat alias; --bff not passed = same effect)
+--no-frontend             Explicitly disable Frontend (backward-compat alias)
 --mobile                  Enable Mobile sub-agent (React Native by default)
 
 # ─── Tech-stack preferences ──────────────────────────────────────────────────
---backend-lang LANG       Backend language, e.g. "Python", "Go", "Node.js" (default: Kotlin)
---backend-framework FW    Backend framework, e.g. "FastAPI", "Gin"  (default: Spring Boot)
+--backend-lang LANG       Backend language, e.g. "Python", "Go", "Node.js" (default: Python)
+--backend-framework FW    Backend framework, e.g. "FastAPI", "Gin"  (default: FastAPI)
 --bff-lang LANG           BFF language (default: Kotlin)
 --bff-framework FW        BFF framework, e.g. "NestJS"  (default: Spring WebFlux)
 --frontend-framework FW   Frontend framework, e.g. "Vue", "Next.js"  (default: React 18)
@@ -1114,9 +1154,9 @@ artifacts/run_20260318_120000/
 ├── 03d_mobile_ios_swift_artifact.json     # Mobile agent — iOS (Swift)
 ├── 03d_mobile_android_kotlin_artifact.json# Mobile agent — Android (Kotlin)
 ├── 04_generated_spec_artifact.json      # Spec Agent — forward contract
-├── 04_review_artifact.json              # Review Agent output
+├── 04_review_artifact_iter<N>.json      # Review Agent output (one file per iteration)
 ├── 05a_testing_architecture.json        # Testing: architecture stage
-├── 05b_testing_infrastructure.json      # Testing: live HTTP + Cypress stage
+├── 05b_testing_infrastructure.json      # Testing: live HTTP stage
 ├── 05c_testing_review.json              # Testing: final sign-off
 ├── 06a_infrastructure_plan_artifact.json  # Infrastructure Agent — IaC plan
 ├── 06b_infrastructure_apply_artifact.json # Infrastructure Agent — containers started
@@ -1126,15 +1166,15 @@ artifacts/run_20260318_120000/
 │   │                                        #   + Pipeline Events table (retries, self-heals)
 │   │                                        #   Updated after EVERY completed stage
 └── generated/                           # ← all generated source code + IaC
-    ├── backend/                         # Language/framework — configurable (default: Kotlin/Spring Boot)
+    ├── backend/                         # Language/framework — configurable (tech-agnostic)
     │   ├── build.gradle.kts             #   (or pyproject.toml, go.mod, package.json …)
     │   ├── src/main/kotlin/...
     │   └── Dockerfile
-    ├── bff/                             # Configurable (default: Kotlin/Spring WebFlux) — optional
+    ├── bff/                             # Configurable (tech-agnostic) — optional
     │   ├── build.gradle.kts
     │   ├── src/main/kotlin/...
     │   └── Dockerfile
-    ├── frontend/                        # Configurable (default: React 18 + TypeScript/Vite) — optional
+    ├── frontend/                        # Configurable (tech-agnostic) — optional
     │   ├── package.json
     │   ├── src/
     │   ├── nginx.conf
@@ -1146,9 +1186,6 @@ artifacts/run_20260318_120000/
     ├── specs/                           # Forward contract (use with --from-run)
     │   ├── openapi.yaml                 # OpenAPI 3.0 — all endpoints
     │   └── schema.sql                   # SQL DDL — all tables
-    ├── cypress/                         # Cypress e2e specs
-    │   ├── cypress.config.ts
-    │   └── e2e/*.cy.ts
     ├── deployment/                      # CI/CD + Kubernetes + Helm
     │   ├── .github/workflows/           # ci.yml, cd-staging.yml, cd-production-canary.yml
     │   │   ├── ci.yml                   #   cd-production-blue-green.yml, security-scan.yml
@@ -1205,9 +1242,9 @@ llm-sdlc-workflow/                        ← repo root
 │           ├── discovery_agent.md
 │           ├── architecture_agent.md
 │           ├── spec_agent.md
-│           ├── backend_agent.md         # default: Kotlin Spring Boot 3.3 persona
-│           ├── bff_agent.md             # default: Kotlin Spring WebFlux persona
-│           ├── frontend_agent.md        # default: React 18 + TypeScript 5 persona
+│           ├── backend_agent.md         # tech-agnostic backend persona
+│           ├── bff_agent.md             # tech-agnostic BFF persona
+│           ├── frontend_agent.md        # tech-agnostic frontend persona
 │           ├── mobile_agent.md          # React Native (Expo), Flutter, Swift, Kotlin variants
 │           ├── infrastructure_agent.md
 │           ├── deployment_agent.md      # GitHub Actions CI/CD, K8s, Helm, canary, blue-green
@@ -1220,7 +1257,7 @@ llm-sdlc-workflow/                        ← repo root
 │
 ├── examples/
 │   ├── status_api_requirements.txt      # minimal single-endpoint API (simplest — best for first run)
-│   ├── ping_echo_requirements.txt       # Kotlin Spring Boot ping + echo endpoints
+│   ├── ping_echo_requirements.txt       # Tech-agnostic ping + echo endpoints
 │   ├── todo_api_requirements.txt        # full CRUD TODO API with persistence
 │   └── hello_world_requirements.txt    # full 3-tier (backend + BFF + frontend)
 │
@@ -1281,5 +1318,4 @@ The JSON schema at the bottom of each prompt file defines the artifact structure
 - **`openai` Python package** (`pip install -e .` installs it) — used as the HTTP client for every LLM provider; no `anthropic` or provider-specific SDK needed
 - GitHub CLI (`gh`) authenticated with a GitHub Copilot licence — only required when using the default GitHub Models endpoint
 - Docker (Docker Desktop or Docker Engine) — for the Infrastructure Agent to build and start containers
-- Node.js 18+ + `npx` — optional, only needed for running Cypress e2e tests locally
 - Python packages: managed via `pyproject.toml` — install with `pip install -e .`

@@ -9,8 +9,6 @@ from .base_agent import BaseAgent, load_prompt
 
 SYSTEM_PROMPT = load_prompt("backend_agent.md")
 
-_BACKEND_DEFAULT = "Kotlin/Spring Boot (Spring Boot 3.3, Kotlin 1.9, Gradle Kotlin DSL)"
-
 
 class BackendAgent(BaseAgent):
     def __init__(
@@ -22,7 +20,10 @@ class BackendAgent(BaseAgent):
     ):
         super().__init__(name="Backend Agent", artifacts_dir=artifacts_dir, generated_dir_name=generated_dir_name)
         parts = [p for p in [language, framework] if p]
-        self.tech_hint = " / ".join(parts) if parts else _BACKEND_DEFAULT
+        # None means "agent freely decides from requirements" — no default imposed
+        self.tech_hint: Optional[str] = " / ".join(parts) if parts else None
+        # Use the generated_dir_name (project name) as the Python module/package name
+        self._module_name = generated_dir_name.replace("-", "_") if generated_dir_name != "generated" else "app"
 
     async def run(
         self,
@@ -37,15 +38,19 @@ class BackendAgent(BaseAgent):
         feedback_section = self._build_feedback_section(review_feedback)
 
         if review_feedback and current_artifact:
-            # Targeted patch mode: fix specific issues in existing code rather
-            # than regenerating all files from scratch (prevents new-bug churn).
+            # Targeted patch mode: preserve chosen stack from artifact, never let LLM drift
+            chosen = self._stack_from_artifact(current_artifact)
+            _spec_ctx = f"Tech stack: {chosen}\n"
+            _spec_ctx += "CRITICAL: Do NOT change the tech stack. Fix only the issues listed.\n\n"
+            if contract.openapi_spec:
+                _spec_ctx += contract.openapi_spec[:3000]
             artifact = await self._patch_files_chunked(
                 system=SYSTEM_PROMPT,
                 existing_artifact=current_artifact,
                 feedback=review_feedback,
                 model_class=EngineeringArtifact,
                 file_keys=["generated_files"],
-                spec_context=contract.openapi_spec[:3000] if contract.openapi_spec else "",
+                spec_context=_spec_ctx,
             )
         else:
             backend_port = contract.service_ports.get("backend", 8080) if contract.service_ports else 8080
@@ -54,9 +59,30 @@ class BackendAgent(BaseAgent):
             ))
             port_role = "internal (sits behind BFF or frontend)" if is_internal else "external (directly exposed to clients)"
 
+            # Only constrain the stack when the user explicitly configured one
+            if self.tech_hint:
+                tech_line = (
+                    f"Tech stack: {self.tech_hint}\n"
+                    f"IMPORTANT: ALL source files MUST use {self.tech_hint}."
+                )
+                fill_tech = (
+                    f"Write COMPLETE, RUNNABLE {self.tech_hint} content for: {{path}}\n"
+                    f"Tech stack: {self.tech_hint} — do NOT switch languages or frameworks.\n"
+                )
+            else:
+                tech_line = (
+                    "Tech stack: choose the most appropriate stack based on the requirements.\n"
+                    "Justify your choice in backend_tech.rationale."
+                )
+                fill_tech = (
+                    "Write COMPLETE, RUNNABLE content for: {path}\n"
+                    "Use the same tech stack you chose in the plan phase — do NOT change it.\n"
+                )
+
             plan_message = f"""Plan and list every file for the backend/ service.
 
-Tech stack: {self.tech_hint}
+{tech_line}
+Module / package name: {self._module_name}  (place source under backend/{self._module_name}/)
 
 ## Discovery
 {self._compact(intent)}
@@ -68,16 +94,17 @@ Tech stack: {self.tech_hint}
 Return JSON with every file's content = "__PENDING__". Valid json."""
 
             fill_tmpl = (
-                f"Write COMPLETE, RUNNABLE {self.tech_hint} content for: {{path}}\n"
-                "Purpose: {purpose}\n"
-                f"Service: backend  |  port: {backend_port}  ({port_role})\n"
-                f"EXPOSE {backend_port} in Dockerfile\n"
-                f"HEALTHCHECK must use port {backend_port}\n"
-                f"server.port={backend_port} in application.yml and CMD\n"
-                "Architecture: {arch_style}\n"
-                "Endpoints: {endpoints_summary}\n\n"
-                "Return JSON: {{\"content\": \"<full file>\"}}\n"
-                "No TODOs. Valid json."
+                fill_tech
+                + "Purpose: {purpose}\n"
+                + f"Service: backend  |  port: {backend_port}  ({port_role})\n"
+                + f"Module: {self._module_name}  (imports: from {self._module_name}.xxx import ...)\n"
+                + f"EXPOSE {backend_port} in Dockerfile\n"
+                + f"HEALTHCHECK must target port {backend_port} — use /health for lightweight APIs\n"
+                + "All response/request models must be defined ONCE in a single models file and imported elsewhere\n"
+                + "Architecture: {arch_style}\n"
+                + "Endpoints: {endpoints_summary}\n\n"
+                + "Return JSON: {{\"content\": \"<full file>\"}}\n"
+                + "No TODOs. Valid json."
             )
 
             artifact = await self._query_and_parse_chunked(
@@ -99,6 +126,16 @@ Return JSON with every file's content = "__PENDING__". Valid json."""
         self._write_service_files(artifact)
         self.save_history()
         return artifact
+
+    def _stack_from_artifact(self, artifact: EngineeringArtifact) -> str:
+        """Derive the tech stack string from a previously generated artifact.
+        Used during patch iterations to anchor the LLM to what was already built,
+        rather than letting it drift based on system prompt priors."""
+        if artifact.backend_tech:
+            return f"{artifact.backend_tech.language} / {artifact.backend_tech.framework}"
+        if self.tech_hint:
+            return self.tech_hint
+        return "the same tech stack used in the existing files"
 
     def _build_contract_section(self, contract: GeneratedSpecArtifact) -> str:
         parts = ["\n\n## Contract (source of truth — implement exactly)"]

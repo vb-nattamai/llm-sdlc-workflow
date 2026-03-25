@@ -1,0 +1,30 @@
+Build a minimal hello-world HTTP API service.
+
+Requirements:
+1. GET /hello → returns JSON: { "message": "Hello, World!" }
+2. Single endpoint only, no complex logic
+
+Technology:
+- Python with FastAPI
+- Uvicorn ASGI server
+- Docker containerization with docker-compose
+
+Constraints:
+- Must use Python 3.11+
+- Must use FastAPI framework
+- Must use port 8000
+- Minimal codebase - single file is acceptable
+- Stateless service
+- No database required
+- No authentication required
+
+Success Criteria:
+- GET /hello returns { "message": "Hello, World!" } with 200 status
+- docker compose up starts the service
+- Service responds to requests on http://localhost:8000/hello
+- Docker image builds and runs without errors
+
+Notes:
+- Keep it as simple as possible
+- This is a minimal proof-of-concept API
+- Similar to "hello world" in web frameworks

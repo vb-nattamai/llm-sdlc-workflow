@@ -27,12 +27,18 @@ SYSTEM_PROMPT = load_prompt("review_agent.md")
 # Files whose full content is critical for a meaningful code review.
 # All others are listed path-only to keep context size manageable.
 _KEY_FILE_PATTERNS = (
-    "controller", "service", "config", "application.yml",
-    "docker-compose", "nginx.conf", "dockerfile",
-    "webclient", "exception", "handler", "interceptor",
+    # Generic / framework-agnostic
+    "controller", "service", "config", "handler", "exception",
+    "docker-compose", "nginx.conf", "dockerfile", "security",
+    # Python / FastAPI
+    "router", "schema", "crud", "deps", "main.py",
+    "database", "models.py", "middleware", "settings",
+    # Kotlin / Spring (retained for full-stack runs)
+    "application.yml", "webclient", "interceptor",
+    "appconfig", "webconfig",
+    # React / TypeScript frontend
     "useeffect", "usefetch", "app.tsx", "index.tsx",
     "client.ts", "homepage", "backendclient",
-    "appconfig", "webconfig", "security",
 )
 _MAX_CONTENT_CHARS = 5000   # per file — increased to avoid truncating key config files
 _MAX_CONTENT_FILES = 30     # max files whose content we embed
